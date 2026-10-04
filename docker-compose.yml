@@ -1,0 +1,38 @@
+# Local development dependencies for School in a Box.
+# Start everything with:  docker compose up -d
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: siab-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-siab}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-siab}
+      POSTGRES_DB: ${POSTGRES_DB:-siab}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-siab} -d ${POSTGRES_DB:-siab}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: siab-redis
+    # AOF persistence so queued Celery tasks survive restarts (ADR-010).
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres-data:
+  redis-data:

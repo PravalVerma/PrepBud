@@ -1,5 +1,25 @@
 node_modules/
 .env
+.env.local
 dist/
 build/
 .DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Frontend
+.next/
+next-env.d.ts
+*.tsbuildinfo
+coverage/
+test-results/
+playwright-report/

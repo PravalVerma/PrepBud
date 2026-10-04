@@ -1,0 +1,35 @@
+# Disposable PostgreSQL + Redis for running the backend test-suite against fixed
+# servers instead of testcontainers (data lives in tmpfs and vanishes on `down`).
+#
+#   docker compose -f docker-compose.test.yml up -d
+#   cd backend
+#   TEST_DATABASE_URL=postgresql+asyncpg://siab:siab@localhost:55432/siab_test \
+#   TEST_REDIS_URL=redis://localhost:56379/0 uv run pytest
+name: prepbud-test
+
+services:
+  postgres-test:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: siab
+      POSTGRES_PASSWORD: siab
+      POSTGRES_DB: siab_test
+    ports:
+      - "55432:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U siab -d siab_test"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  redis-test:
+    image: redis:7-alpine
+    ports:
+      - "56379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
