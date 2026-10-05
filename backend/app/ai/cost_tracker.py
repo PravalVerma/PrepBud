@@ -31,6 +31,7 @@ from app.db.models import AIInteraction, AITrace
 logger = get_logger(__name__)
 
 COST_KEY_TTL_SECONDS = 25 * 3600
+_UNPRICED_WARNED: set[str] = set()
 
 
 def compute_cost(
@@ -162,7 +163,9 @@ class AIUsageRecorder:
         }
         if cost is None:
             metadata["cost_unknown"] = True
-            logger.warning("no pricing configured for model", extra={"model": rec.model})
+            if rec.model not in _UNPRICED_WARNED:  # once per model, not once per call
+                _UNPRICED_WARNED.add(rec.model)
+                logger.warning("no pricing configured for model", extra={"model": rec.model})
         if self.settings.ai_log_content:
             metadata["request"] = rec.request
             metadata["response"] = rec.response

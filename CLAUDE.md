@@ -9,8 +9,9 @@ single source of truth. Read this file first, then the doc sections relevant to 
 | --- | --- |
 | 1 Architecture & contracts (`docs/`, `walkthrough.md`) | ✅ committed |
 | 2 Foundation & data layer | ✅ committed (`53602a2`) |
-| 3 Content pipeline | ✅ implemented, all AC-3.x verified locally — **awaiting user review/commit** |
-| 4–8 | not started — **ask the user before starting each new phase** |
+| 3 Content pipeline | ✅ committed (`5f35580`) |
+| 4 Learning engine core | ✅ implemented, all AC-4.x verified (846 tests, 96% cov) — **awaiting user review/commit** |
+| 5–8 | not started — **ask the user before starting each new phase** |
 
 Each phase's deliverables + acceptance criteria (AC-x.y) live in `docs/DEVELOPMENT_PHASES.md`.
 At the end of a phase: report AC status, update this table, stop. Never commit/push unless asked
@@ -40,6 +41,7 @@ backend/   FastAPI app (uv, Python 3.12)
   app/ai/                  LLM client, providers, prompts/*.md (Jinja2), cost tracking  [Phase 3]
   app/services/content/    extraction, chunking, concept extraction, retrieval         [Phase 3]
   app/workers/             Celery app + tasks                                          [Phase 3]
+  app/services/student_model, assessment, tutor, learning_engine                        [Phase 4]
   app/integrations/        redis, s3, qdrant
   alembic/versions/        hand-written DDL (one statement per execute — asyncpg)
   tests/unit, tests/integration (testcontainers or TEST_DATABASE_URL/TEST_REDIS_URL), tests/ai
@@ -95,6 +97,30 @@ docs/      the spec — PRODUCT_REQUIREMENTS, ARCHITECTURE(+_DECISIONS), DOMAIN_
   teachable in 2–5 min"; no copyright tracking; no pre-built concept graphs; LLM-assisted dedup
   (exact normalised-name match within the same subject, then LLM duplicates).
 
+### Phase 4 decisions (learning engine — services only; REST/WebSocket + UI are Phase 5)
+
+- `services/learning_engine/`: LangGraph `StateGraph` (`orchestrator.py`) runs **one turn per student
+  message** (START routes on `pending_input`; ends wherever the student must respond). No LangGraph
+  checkpointer (its Redis saver needs Redis Stack): `session_manager.py` checkpoints the full JSON state
+  after each turn to Redis `session:{id}:state` (TTL 2 h) **and** `learning_sessions.metadata.checkpoint`;
+  load picks the copy with the higher `turn`. Turns serialised by Redis lock `lock:session:{id}`.
+- Transient LLM error → `error` event, state untouched (client resends); permanent/budget → graceful
+  wrap-up with template summary (`no_llm`). Per-session token budget from `ai_traces.session_id`.
+- BKT (`student_model/mastery_tracker.py`) = LEARNING_ENGINE §4.2 (doc **revised** to match: score =
+  soft evidence, learning transition weighted by evidence, monotonic clamp; example table pinned by
+  `test_documented_examples`). §7.1 also revised: re-explain only after a poor/wrong answer.
+  Specialisation edges are stored as the inverse generalisation (`concept_graph.canonical_edge`). Decay applied **on read** from `last_assessed_at` (never compounds).
+  SM-2 at session end updates mastery rows (`next_review_at`); study-plan review items are Phase 6.
+- MCQ/true-false graded exactly (no LLM); wrong MCQ → distractor's `misconception` tag, else
+  `misconception_detection` task. Free text → `answer_evaluation` task. Misconceptions matched by
+  `misconception_key` (snake_case == words); resolved after 3 correct in a row.
+- Questions stored and reused (same concept/type, |difficulty − target| ≤ 0.15, not asked this session).
+- Frustration guard: 5 consecutive failures (or response-time spike) → encouragement, −0.2 difficulty,
+  switch to easiest remaining concept; evidence resets after each activation; 2nd activation ends session.
+- Protocol additions documented in API_CONTRACT §3.9 notes (`request_hint`, `session_started`,
+  `tutor_message`, `end_reason` values). Fake LLM in `tests/fakes.py` recognises prompts by their
+  `## Task: …` headings.
+
 ## Local environment (this machine)
 
 - Another project's containers own ports 5432 / 6379 / 8000 — **never stop them**. PrepBud's root
@@ -104,12 +130,16 @@ docs/      the spec — PRODUCT_REQUIREMENTS, ARCHITECTURE(+_DECISIONS), DOMAIN_
   the bucket. Local S3 keys: `infra/seaweedfs/s3.json`.
 - Mock OpenAI-compatible LLM for E2E/smoke: `node frontend/tests/e2e/support/mock-llm.mjs` (:54330);
   point `LLM_BASE_URL=http://127.0.0.1:54330/v1`. Real LLM needs the user's `LLM_API_KEY`.
-- **LLM = local Ollama** (user's laptop: i5-1145G7, 16 GB RAM, no GPU). Models `qwen2.5:3b` (all chat
-  tasks) + `nomic-embed-text` (768-dim, Qdrant collection `document_sections_nomic_768`). Configured in
-  the root `.env` (`LLM_PROVIDERS__OLLAMA__*`, `LLM_TASKS__*`, `CONTENT__*`); `OLLAMA_CONTEXT_LENGTH=8192`
-  is set as a user env var. Verified end to end: ~90 s for a 1-chunk document; the 3B model misses
-  concepts sometimes — expect weak quality and slow 50-page documents (AC-3.6 assumes a hosted model).
-  If Ollama is unreachable run `ollama serve`. Switching provider = `.env` only (see `.env.example`).
+- **LLM = Google Gemini free tier** via the OpenAI-compatible endpoint
+  (`LLM_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai`, key in `LLM_API_KEY`, provider
+  name `gemini`). Heavy tasks (concept extraction, tutor, misconception) → `gemini-3.6-flash`; light
+  (questions, grading, summary) → `gemini-3.5-flash-lite`; embeddings `gemini-embedding-001` @ 768 dims in
+  Qdrant collection `document_sections_gemini_768`; `AI_PRICING` = 0 (free tier). Verified end to end
+  2026-10-05 (doc 36 s, session turns 1–12 s). Gotchas: Google returns 404 for retired models (2.5 is
+  retired for new users) and 503 "high demand" for the newest (3.7/3.8) — the provider retries 503s.
+  Free-tier prompts may be used by Google: test material only. Ollama (qwen2.5:3b, nomic-embed-text)
+  stays installed as an offline fallback (`.env.example` has both blocks). Changing the embedding model
+  ⇒ new collection + `processor.reindex()` for ready documents.
 - Windows: Celery worker needs `--pool=solo`. Tesseract may be missing locally (OCR tests skip;
   CI installs it).
 - `make` may be unavailable on Windows — run the recipe commands from `Makefile` directly.
@@ -137,5 +167,10 @@ frontend: npm run dev · npm test · npm run lint · npm run typecheck · npm ru
 - Celery eager `.apply()` re-raises `Retry` when `task_eager_propagates` is on; tests turn it off.
 - redis-py pinned to 6.4 by kombu 5.6 (stable); testcontainers then resolves to 4.13 (old import
   path, handled with try/except in tests/integration/conftest.py).
+- Windows console is cp1252: run ad-hoc scripts that print model output with
+  `PYTHONIOENCODING=utf-8`. Don't run `uv run …` commands concurrently with a pytest run (uv may
+  reinstall the project and the spawn fails with "pytest not found").
+- Real small models (qwen2.5:3b) sometimes produce wrong answer keys and use `\( \)` LaTeX — the
+  Phase 5 renderer must accept both `$…$` and `\(…\)`.
 - Keyword retrieval uses an any-term tsquery (ANDs→ORs unless the query has `-exclusion`); the
   concept list `search` filter stays strict AND.

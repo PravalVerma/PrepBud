@@ -32,6 +32,7 @@ from app.integrations.qdrant import SectionVectorStore
 from app.integrations.s3 import ObjectStorage
 from app.main import create_app
 from app.services.content.document_processor import DocumentProcessor
+from app.services.learning_engine.session_manager import SessionManager
 from tests.fakes import FakeLLMProvider, FakeOCR, FakeQueue
 from tests.support import TEST_BUCKET, build_settings, jwks
 
@@ -244,3 +245,28 @@ async def drain(processor: DocumentProcessor, queue: FakeQueue) -> list[str]:
         document_id, user_id, task_id = queue.documents.pop(0)
         outcomes.append(str(await processor.process(document_id, user_id, task_id=task_id)))
     return outcomes
+
+
+@pytest.fixture
+def session_manager(app: FastAPI, fake_llm: FakeLLMProvider) -> SessionManager:
+    """The learning-session engine wired to the test app (fake LLM, real DB + Redis)."""
+    fake_llm.stream_text = "Here is a clear explanation of the idea."
+    state = app.state
+    return SessionManager(
+        settings=state.settings,
+        sessionmaker=state.sessionmaker,
+        llm=state.llm,
+        recorder=state.ai_recorder,
+        prompts=get_prompt_manager(),
+        redis=state.redis,
+        vectors=state.vector_store,
+    )
+
+
+async def provision(client: httpx.AsyncClient, headers: dict[str, str]) -> Any:
+    """Create the user behind ``headers`` (first authenticated call) and return its id."""
+    import uuid
+
+    resp = await client.post("/api/v1/auth/callback", json={}, headers=headers)
+    assert resp.status_code in (200, 201), resp.text
+    return uuid.UUID(resp.json()["data"]["id"])

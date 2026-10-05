@@ -149,6 +149,20 @@ class LearningEngineSettings(BaseModel):
     max_content_chunks: int = 5
     context_token_budget: int = 4000
     default_concepts_per_day: int = 3
+    # --- engine internals (not in LEARNING_ENGINE §10; sensible defaults) -----------------
+    # Move on from a concept after this many questions even if not yet mastered.
+    max_attempts_per_concept: int = 6
+    # Frustration response (LEARNING_ENGINE §7.3).
+    frustration_difficulty_drop: float = 0.2
+    frustration_response_time_factor: float = 2.5
+    # A second frustration activation in one session ends it with an encouraging message.
+    frustration_max_activations: int = 2
+    # Redis: session state (DATA_MODEL §5: 2 hours) and mastery cache (30 minutes).
+    session_state_ttl_seconds: int = 7200
+    mastery_cache_ttl_seconds: int = 1800
+    mastery_history_limit: int = 50
+    # Stored questions within this difficulty distance of the target are reused (assumption #9).
+    question_reuse_window: float = 0.15
 
 
 class Settings(BaseSettings):

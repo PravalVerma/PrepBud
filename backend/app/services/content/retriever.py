@@ -147,19 +147,32 @@ class HybridRetriever:
         return list(rows.all())
 
     async def semantic(
-        self, user_id: uuid.UUID, query: str, *, limit: int, **scope: uuid.UUID | None
+        self,
+        user_id: uuid.UUID,
+        query: str,
+        *,
+        limit: int,
+        ctx: AICallContext | None = None,
+        **scope: uuid.UUID | None,
     ) -> list[uuid.UUID]:
+        """Vector search. Without ``ctx`` the query embedding gets its own trace."""
         if self.vectors is None or self.llm is None or self.recorder is None:
             raise VectorStoreError("Vector search is not configured")
-        trace_id = await self.recorder.start_trace(user_id, "content_search")
-        ctx = AICallContext(user_id=user_id, trace_id=trace_id, purpose="search_query_embedding")
-        try:
-            [vector] = await self.llm.embed([query], ctx)
+        if ctx is not None:
+            [vector] = await self.llm.embed([query], ctx.for_purpose("retrieve_content"))
             hits = await self.vectors.search(user_id, vector, limit=limit, **scope)
-        except Exception:
-            await self.recorder.finish_trace(trace_id, "failed")
-            raise
-        await self.recorder.finish_trace(trace_id, "completed")
+        else:
+            trace_id = await self.recorder.start_trace(user_id, "content_search")
+            own = AICallContext(
+                user_id=user_id, trace_id=trace_id, purpose="search_query_embedding"
+            )
+            try:
+                [vector] = await self.llm.embed([query], own)
+                hits = await self.vectors.search(user_id, vector, limit=limit, **scope)
+            except Exception:
+                await self.recorder.finish_trace(trace_id, "failed")
+                raise
+            await self.recorder.finish_trace(trace_id, "completed")
         # Vectors may outlive a deleted section briefly; keep only rows the user still owns.
         ids = [h.section_id for h in hits]
         if not ids:
@@ -200,7 +213,12 @@ class HybridRetriever:
         if mode in (SearchMode.HYBRID, SearchMode.SEMANTIC):
             try:
                 rankings["semantic"] = await self.semantic(
-                    user_id, query, limit=candidates, **scope
+                    user_id,
+                    query,
+                    limit=candidates,
+                    subject_id=subject_id,
+                    document_id=document_id,
+                    concept_id=concept_id,
                 )
             except AIBudgetExceededError:
                 if mode is SearchMode.SEMANTIC:
@@ -254,3 +272,90 @@ class HybridRetriever:
             headline = row[7] if with_headline and "keyword" in hit.matched_by else None
             hit.snippet = " ".join((headline or row[6] or "").split())
         hits[:] = [h for h in hits if h.document_id is not None]
+
+
+# --- Retrieval for teaching (LEARNING_ENGINE §9.1) -----------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class RetrievedSection:
+    section_id: uuid.UUID
+    document_title: str
+    heading: str | None
+    page_numbers: list[int]
+    content: str
+    sources: tuple[str, ...]
+
+
+async def retrieve_for_concept(
+    retriever: HybridRetriever,
+    user_id: uuid.UUID,
+    *,
+    concept_id: uuid.UUID,
+    concept_name: str,
+    concept_description: str | None,
+    limit: int,
+    ctx: AICallContext | None = None,
+) -> list[RetrievedSection]:
+    """Material that teaches a concept: sections linked to it during extraction, plus
+    semantic (name + description) and keyword (name) matches, fused by RRF.
+
+    The semantic side is optional: if it fails the other two still answer.
+    """
+    session = retriever.session
+    linked = list(
+        (
+            await session.scalars(
+                select(DocumentSection.id)
+                .join(
+                    DocumentSectionConcept,
+                    DocumentSectionConcept.document_section_id == DocumentSection.id,
+                )
+                .join(Document, Document.id == DocumentSection.document_id)
+                .where(DocumentSectionConcept.concept_id == concept_id, Document.user_id == user_id)
+                .order_by(
+                    DocumentSectionConcept.relevance_score.desc(), DocumentSection.section_index
+                )
+                .limit(limit * 2)
+            )
+        ).all()
+    )
+    rankings: dict[str, list[uuid.UUID]] = {"linked": linked}
+    no_scope: dict[str, uuid.UUID | None] = {
+        "subject_id": None,
+        "document_id": None,
+        "concept_id": None,
+    }
+    rankings["keyword"] = await retriever.keyword(
+        user_id, concept_name, limit=limit * 2, **no_scope
+    )
+    try:
+        query = f"{concept_name}: {concept_description}" if concept_description else concept_name
+        rankings["semantic"] = await retriever.semantic(
+            user_id, query, limit=limit * 2, ctx=ctx, **no_scope
+        )
+    except (LLMError, VectorStoreError) as exc:
+        logger.info("semantic retrieval skipped", extra={"error": type(exc).__name__})
+
+    fused = reciprocal_rank_fusion(rankings)[:limit]
+    if not fused:
+        return []
+    rows = await session.execute(
+        select(
+            DocumentSection.id,
+            Document.title,
+            DocumentSection.heading,
+            DocumentSection.page_numbers,
+            DocumentSection.content,
+        )
+        .join(Document, Document.id == DocumentSection.document_id)
+        .where(DocumentSection.id.in_([i for i, _, _ in fused]), Document.user_id == user_id)
+    )
+    by_id = {r[0]: r for r in rows}
+    return [
+        RetrievedSection(
+            i, by_id[i][1], by_id[i][2], list(by_id[i][3] or []), by_id[i][4], tuple(src)
+        )
+        for i, _, src in fused
+        if i in by_id
+    ]

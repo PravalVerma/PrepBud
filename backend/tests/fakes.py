@@ -43,6 +43,21 @@ CONCEPT_LINE = re.compile(
 CHUNK_MARK = re.compile(r"---CHUNK (\d+)---")
 REF_LINE = re.compile(r"^- (?P<ref>[NE]\d+): (?P<name>.+?)(?: — .*)?$", re.MULTILINE)
 TEST_DIMENSIONS = 64
+PROMPT_KINDS = (
+    ("NEW concepts just extracted", "relationships"),
+    ("---CHUNK", "extraction"),
+    ("## Task: generate questions", "question"),
+    ("## Task: evaluate an answer", "evaluation"),
+    ("## Task: diagnose a misconception", "misconception"),
+    ("## Task: summarise the session", "summary"),
+)
+
+
+def _line(prompt: str, prefix: str) -> str | None:
+    for line in prompt.splitlines():
+        if line.startswith(prefix):
+            return line[len(prefix) :].strip()
+    return None
 
 
 def hash_embedding(
@@ -78,6 +93,11 @@ class FakeLLMProvider(LLMProvider):
     requires: dict[str, set[str]] = field(default_factory=dict)
     dims: int = TEST_DIMENSIONS
     on_complete: Callable[[list[LLMMessage]], str] | None = None
+    # Phase 4 behaviour: tutor stream text, question shapes, failures by call kind.
+    stream_text: str | None = None
+    stream_fail_with: LLMError | None = None
+    fail_kinds: dict[str, LLMError] = field(default_factory=dict)
+    question_counter: int = 0
 
     async def complete(
         self,
@@ -89,17 +109,15 @@ class FakeLLMProvider(LLMProvider):
         json_mode: bool = False,
     ) -> LLMResponse:
         prompt = messages[-1].content
-        kind = (
-            "relationships"
-            if "NEW concepts just extracted" in prompt
-            else ("extraction" if "---CHUNK" in prompt else "other")
-        )
+        kind = next((k for marker, k in PROMPT_KINDS if marker in prompt), "other")
         self.calls.append(kind)
         if self.latency_s:
             await asyncio.sleep(self.latency_s)
         if self.fail_with is not None and self.fail_times != 0:
             self.fail_times -= 1
             raise self.fail_with
+        if kind in self.fail_kinds:
+            raise self.fail_kinds[kind]
         if self.on_complete is not None:
             content = self.on_complete(messages)
         elif self.raw_response is not None:
@@ -108,6 +126,25 @@ class FakeLLMProvider(LLMProvider):
             content = self._extract(prompt)
         elif kind == "relationships":
             content = self._relate(prompt)
+        elif kind == "question":
+            content = self._question(prompt)
+        elif kind == "evaluation":
+            content = self._evaluate(prompt)
+        elif kind == "misconception":
+            content = json.dumps(
+                {
+                    "misconceptions": [
+                        {
+                            "name": "picked_plausible_distractor",
+                            "description": "Chose an answer that only looks right",
+                            "confidence": 0.8,
+                            "evidence": "wrong option chosen",
+                        }
+                    ]
+                }
+            )
+        elif kind == "summary":
+            content = "You made solid progress today. Keep going!"
         else:
             content = "{}"
         return LLMResponse(
@@ -169,6 +206,91 @@ class FakeLLMProvider(LLMProvider):
                     )
         return json.dumps({"duplicates": duplicates, "relationships": relationships})
 
+    def _question(self, prompt: str) -> str:
+        concept = _line(prompt, "Concept:") or "the concept"
+        qtype = _line(prompt, "Question type:") or "short_answer"
+        difficulty = float((_line(prompt, "Target difficulty:") or "0.5").split()[0])
+        items = []
+        for _ in range(2):
+            self.question_counter += 1
+            n = self.question_counter
+            item: dict[str, Any] = {
+                "type": qtype,
+                "difficulty": difficulty,
+                "explanation": f"Because of how {concept} works.",
+                "hints": [f"Think about {concept}.", "Look at the definition again."],
+                "misconceptions_tested": ["confuses_terms"],
+            }
+            if qtype == "mcq":
+                item |= {
+                    "content": f"Q{n}: Which statement about {concept} is right?",
+                    "correct_answer": "B",
+                    "options": [
+                        {
+                            "label": "A",
+                            "text": "a tempting wrong idea",
+                            "is_correct": False,
+                            "misconception": "confuses_terms",
+                        },
+                        {
+                            "label": "B",
+                            "text": "correct-answer",
+                            "is_correct": True,
+                            "misconception": None,
+                        },
+                        {
+                            "label": "C",
+                            "text": "an unrelated claim",
+                            "is_correct": False,
+                            "misconception": None,
+                        },
+                        {
+                            "label": "D",
+                            "text": "the opposite claim",
+                            "is_correct": False,
+                            "misconception": None,
+                        },
+                    ],
+                }
+            elif qtype == "true_false":
+                item |= {
+                    "content": f"Q{n}: True or false: {concept} is useful.",
+                    "correct_answer": True,
+                }
+            else:
+                item |= {
+                    "content": f"Q{n}: Explain {concept} in your own words.",
+                    "correct_answer": "correct-answer",
+                }
+            items.append(item)
+        return json.dumps({"questions": items})
+
+    @staticmethod
+    def _evaluate(prompt: str) -> str:
+        answer = (
+            prompt.split("---USER INPUT---")[-1].split("---END USER INPUT---")[0].strip().lower()
+        )
+        if "correct-answer" in answer:
+            result: dict[str, Any] = {"is_correct": True, "score": 1.0, "explanation": "Spot on!"}
+        elif "partial" in answer:
+            result = {"is_correct": False, "score": 0.5, "explanation": "Half right."}
+        else:
+            result = {"is_correct": False, "score": 0.0, "explanation": "Not yet."}
+        result["misconceptions_detected"] = (
+            [
+                {
+                    "name": "sign_error",
+                    "description": "Flips the sign",
+                    "confidence": 0.9,
+                    "evidence": answer[:50],
+                }
+            ]
+            if "misc" in answer
+            else []
+        )
+        result["follow_up_suggestion"] = "practice_more"
+        return json.dumps(result)
+
     async def stream(
         self,
         messages: list[LLMMessage],
@@ -177,7 +299,15 @@ class FakeLLMProvider(LLMProvider):
         temperature: float = 0.7,
         max_tokens: int = 2000,
     ) -> AsyncIterator[StreamEvent]:
-        for word in ["Hello", " student", "!"]:
+        self.calls.append("stream")
+        if self.stream_fail_with is not None:
+            raise self.stream_fail_with
+        words = (
+            ["Hello", " student", "!"]
+            if self.stream_text is None
+            else [w + " " for w in self.stream_text.split()]
+        )
+        for word in words:
             yield StreamEvent(delta=word)
         yield StreamEvent(input_tokens=10, output_tokens=3, model=model)
 

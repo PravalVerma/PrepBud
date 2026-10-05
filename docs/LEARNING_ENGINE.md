@@ -138,6 +138,11 @@ After every student response (question attempt), the system updates the student'
 
 ### 4.2 Bayesian Knowledge Tracing (Simplified)
 
+> **Revised in Phase 4.** The first version of this formula applied the learning
+> transition after every answer, so a *wrong* answer could *raise* mastery when mastery was
+> already low. For example, with mastery 0.05 a wrong answer gave 0.09, which contradicts
+> AC-4.1. The version below fixes that; correct answers still raise mastery as before.
+
 ```python
 @dataclass
 class MasteryUpdateInput:
@@ -150,34 +155,46 @@ class MasteryUpdateInput:
     learning_rate: float = 0.1  # P(transition to known)
 
 def update_mastery(input: MasteryUpdateInput) -> float:
-    """Bayesian Knowledge Tracing update."""
-    p_known = input.current_mastery
-    
-    if input.is_correct:
-        # P(known | correct) using Bayes' theorem
-        p_correct_given_known = 1 - input.slip_rate
-        p_correct_given_unknown = input.guess_rate
-        p_correct = p_known * p_correct_given_known + (1 - p_known) * p_correct_given_unknown
-        p_known_updated = (p_known * p_correct_given_known) / p_correct
-    else:
-        # P(known | incorrect)
-        p_incorrect_given_known = input.slip_rate
-        p_incorrect_given_unknown = 1 - input.guess_rate
-        p_incorrect = p_known * p_incorrect_given_known + (1 - p_known) * p_incorrect_given_unknown
-        p_known_updated = (p_known * p_incorrect_given_known) / p_incorrect
-    
-    # Apply learning transition (opportunity to learn from the interaction)
-    p_known_after_learning = p_known_updated + (1 - p_known_updated) * input.learning_rate
-    
-    # Difficulty adjustment: harder questions give more signal
-    confidence_weight = 0.5 + 0.5 * input.question_difficulty
-    final_mastery = (
-        input.current_mastery * (1 - confidence_weight) +
-        p_known_after_learning * confidence_weight
-    )
-    
-    return max(0.0, min(1.0, final_mastery))
+    """Bayesian Knowledge Tracing update (monotonic, partial credit as soft evidence)."""
+    current = clamp(input.current_mastery, 0.0, 1.0)
+    p = min(current, 0.999)       # keep BKT off the boundary so evidence still moves it
+
+    # Bayes' theorem for each possible observation
+    p_correct = p * (1 - input.slip_rate) + (1 - p) * input.guess_rate
+    known_if_correct = p * (1 - input.slip_rate) / p_correct
+    p_incorrect = p * input.slip_rate + (1 - p) * (1 - input.guess_rate)
+    known_if_incorrect = p * input.slip_rate / p_incorrect
+
+    # Partial credit is soft evidence: how strongly this answer counts as "correct".
+    score = clamp(input.score, 0.0, 1.0)
+    evidence = max(score, 0.5) if input.is_correct else min(score, 0.5)
+    posterior = evidence * known_if_correct + (1 - evidence) * known_if_incorrect
+
+    # Learning transition, weighted by the evidence: a student learns from what they got
+    # right, not from a wrong answer.
+    learned = posterior + (1 - posterior) * input.learning_rate * evidence
+
+    # Difficulty adjustment: harder questions give more signal.
+    weight = 0.5 + 0.5 * input.question_difficulty
+    updated = current * (1 - weight) + learned * weight
+
+    # Monotonic guarantee (AC-4.1): a correct answer never lowers mastery and an incorrect
+    # one never raises it.
+    updated = max(updated, current) if input.is_correct else min(updated, current)
+    return clamp(updated, 0.0, 1.0)
 ```
+
+| Example (difficulty 0.5) | Before | After |
+|---|---|---|
+| Correct answer | 0.50 | ≈ 0.73 |
+| Correct answer, harder question (difficulty 0.8) | 0.50 | ≈ 0.77 |
+| Wrong answer | 0.50 | ≈ 0.21 |
+| Wrong answer at low mastery | 0.05 | ≈ 0.02 (the original formula gave 0.09) |
+
+**Decay and confidence:**
+
+- **Decay** (§5.2) is applied when mastery is *read*, measured from `last_assessed_at`, and never written back. Repeated reads therefore never compound it. An update starts from the decayed value and resets the clock.
+- **Confidence** in the estimate grows with the evidence: `attempts / (attempts + 3)`.
 
 ### 4.3 Mastery Level Labels
 
@@ -330,6 +347,8 @@ def decide_action(
     session_type: str,
     previous_action: str | None,
     is_review_item: bool,
+    last_score: float = 1.0,       # score of the latest answer on this concept
+    last_correct: bool = True,
 ) -> str:
     """Decide the next pedagogical action."""
     
@@ -345,8 +364,12 @@ def decide_action(
     if previous_action == 'explain':
         return 'practice'
     
-    # Low mastery after practice: re-explain
-    if mastery < 0.4 and previous_action == 'practice':
+    # Low mastery after a *wrong* answer: re-explain.
+    # (Revised in Phase 4: after a correct answer the student keeps practising even at low
+    # mastery — otherwise a novice would get a new explanation after every right answer.
+    # This matches AI_SYSTEM_DESIGN §6.3: a good score continues practice, a score below 0.3
+    # triggers re-explanation.)
+    if previous_action == 'practice' and (last_score < 0.3 or (mastery < 0.4 and not last_correct)):
         return 'explain'
     
     # Default: practice

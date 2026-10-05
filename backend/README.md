@@ -21,6 +21,11 @@ app/ai/             LLM client (providers/openai.py = any OpenAI-compatible API)
                     cost tracking (ai_traces / ai_interactions), structured-output parsing
 app/services/content/  text_extractor → chunker → concept_extractor → concept_graph
                     → document_processor (pipeline) → indexer (Qdrant); retriever (hybrid search)
+app/services/student_model/  BKT mastery + decay + Redis cache, SM-2 scheduling, misconceptions
+app/services/assessment/     difficulty calibration, question generation (stored + reused), grading
+app/services/tutor/          context assembly (profile, prerequisites, material, history), streaming
+app/services/learning_engine/  concept selection, LangGraph orchestrator, session manager (turns,
+                    Redis + PostgreSQL checkpoints, recovery)
 app/workers/        Celery app, document + re-index tasks, worker runtime wiring
 app/integrations/   redis, s3 (boto3), qdrant
 ```

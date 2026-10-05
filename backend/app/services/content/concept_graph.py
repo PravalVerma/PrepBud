@@ -139,19 +139,33 @@ def _reachable(adj: dict[uuid.UUID, set[uuid.UUID]], start: uuid.UUID, goal: uui
     return False
 
 
+def _canonical_key(s: uuid.UUID, t: uuid.UUID, kind: str) -> tuple[uuid.UUID, uuid.UUID, str]:
+    return (t, s, "generalisation") if kind == "specialisation" else (s, t, kind)
+
+
+def canonical_edge(edge: Edge) -> Edge:
+    """ "B specialisation A" → "A generalisation B" (same fact, one stored form)."""
+    if edge.type == "specialisation":
+        return Edge(edge.target, edge.source, "generalisation", edge.strength)
+    return edge
+
+
 def filter_edges(
     candidates: Iterable[Edge], existing: Iterable[tuple[uuid.UUID, uuid.UUID, str]]
 ) -> tuple[list[Edge], list[Edge]]:
     """Return ``(accepted, dropped)``: no self-loops, no duplicates, no prerequisite cycles.
 
-    ``existing`` holds the edges already stored (source, target, type).
+    ``existing`` holds the edges already stored (source, target, type). "B specialisation A"
+    states the same fact as "A generalisation B", so specialisation edges are stored in their
+    generalisation form and each fact is kept once.
     """
     prereq: dict[uuid.UUID, set[uuid.UUID]] = defaultdict(set)
     present: set[tuple[uuid.UUID, uuid.UUID, str]] = set()
     for s, t, kind in existing:
-        present.add((s, t, kind))
+        present.add(_canonical_key(s, t, kind))
         if kind == "prerequisite":
             prereq[s].add(t)
+    candidates = [canonical_edge(e) for e in candidates]
 
     accepted: list[Edge] = []
     dropped: list[Edge] = []

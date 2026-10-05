@@ -69,9 +69,22 @@ class TestFilterEdges:
         accepted, _ = filter_edges([Edge(D, C, "related", 0.5)], [(C, D, "related")])
         assert accepted == []
 
+    def test_specialisation_is_stored_as_the_inverse_generalisation(self) -> None:
+        """'B specialisation A' and 'A generalisation B' are one fact — keep it once."""
+        accepted, dropped = filter_edges(
+            [Edge(A, B, "generalisation", 0.5), Edge(B, A, "specialisation", 0.7)], []
+        )
+        assert accepted == [Edge(A, B, "generalisation", 0.7)] and dropped == []
+        accepted, _ = filter_edges([Edge(C, D, "specialisation", 0.6)], [])
+        assert accepted == [Edge(D, C, "generalisation", 0.6)]
+
+    def test_existing_specialisation_rows_count_as_present(self) -> None:
+        accepted, _ = filter_edges([Edge(A, B, "generalisation", 0.5)], [(B, A, "specialisation")])
+        assert accepted == []
+
     def test_non_prerequisite_types_may_form_cycles(self) -> None:
         accepted, dropped = filter_edges(
-            [Edge(A, B, "generalisation", 0.5), Edge(B, A, "specialisation", 0.5)], []
+            [Edge(A, B, "generalisation", 0.5), Edge(B, A, "generalisation", 0.5)], []
         )
         assert len(accepted) == 2 and dropped == []
 

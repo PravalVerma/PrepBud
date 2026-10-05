@@ -416,6 +416,7 @@ Get the concept's neighbourhood in the prerequisite graph.
 - **`GET /concepts/{id}`:** additionally returns `dependents` (concepts that list this one as a prerequisite), `subject_id`, `chapter_id`, `section_id`, `created_at`, and `metadata.{origin, aliases}`.
 - **`related_concepts[].relationship`:** describes the other concept relative to this one: `related | generalisation | specialisation`.
 - **Edge direction:** `source` is a prerequisite of `target`.
+- **Generalisation and specialisation:** "B specialisation A" is stored as "A generalisation B", so each fact is stored once. `related_concepts` still reports both views: from A, B is a `specialisation`; from B, A is a `generalisation`.
 - **`GET /concepts/{id}/graph`:** accepts `?depth=1..3` (default 1) and includes edges of all relationship types.
 
 ### 3.6.1 Content Search *(added in Phase 3 — AC-3.4)*
@@ -684,6 +685,32 @@ Real-time bidirectional communication for learning sessions.
   }
 }
 ```
+
+#### Session protocol — implementation notes (Phase 4)
+
+The learning engine (`app/services/learning_engine/`) implements this protocol. Phase 5 exposes it over the WebSocket. Additions to the message lists above:
+
+- **Client → server, `request_hint`:** `{"type": "request_hint", "payload": {}}`, valid while a question is open.
+- **Client → server, `student_response`:** may include `time_taken_seconds` (non-negative integer), used for fatigue detection.
+- **Server → client, `session_started`:** `{"session_id", "objective"}`. It is the first event of a new session.
+- **Server → client, `tutor_message`:** `{"kind": "encouragement" | "no_more_hints", "content"}`, for example when the frustration guard activates.
+- **Server → client, `explanation_start`:** carries `kind`: `intro | retry | worked_example | socratic | followup | resume`.
+- **Server → client, `question`:** carries `mode` (`practice | review`). Options never reveal which one is correct.
+- **Server → client, `evaluation`:** adds `question_id` and, when the answer was wrong, `correct_answer`.
+- **Server → client, `misconception_detected`:** adds `status` (`active | recurring`).
+- **Server → client, `session_ended`:** `summary` adds `text` (natural-language summary), `reviews` (next SM-2 review date per practised concept) and `end_reason`. The possible `end_reason` values are:
+  - `student_ended`, `concepts_complete`, `all_mastered`, `time_budget`, `interaction_limit`, `frustration`
+  - `token_budget`, `ai_unavailable`, `ai_budget_exceeded`
+
+**Ordering rules:**
+
+- A message that doesn't fit what the session is waiting for is rejected with `409 CONFLICT`. Examples: an answer when no question is open, or a stale `question_id`.
+- Turns on one session are processed one at a time.
+
+**AI failures:**
+
+- **Transient:** an `error` event (`code`: `LLM_TIMEOUT | LLM_UNAVAILABLE | LLM_RATE_LIMITED`) is sent, and the session stays exactly where it was, so the client can resend.
+- **Permanent:** an `error` event is followed by `session_ended`. This covers provider rejections and an exhausted daily or per-session budget (`SESSION_TOKEN_BUDGET`).
 
 ---
 
