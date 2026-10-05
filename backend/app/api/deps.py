@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.cost_tracker import AIUsageRecorder
 from app.ai.llm_client import LLMClient
+from app.ai.prompt_manager import get_prompt_manager
 from app.config import Settings
 from app.core.exceptions import (
     AuthenticationError,
@@ -29,6 +30,7 @@ from app.domain.common import DEFAULT_PER_PAGE, MAX_PER_PAGE
 from app.integrations.qdrant import SectionVectorStore
 from app.integrations.s3 import ObjectStorage
 from app.services.content.document_processor import TaskQueue
+from app.services.learning_engine.session_manager import SessionManager
 
 logger = get_logger(__name__)
 
@@ -217,3 +219,33 @@ VectorStore = Annotated[SectionVectorStore | None, Depends(get_vector_store)]
 Queue = Annotated[TaskQueue, Depends(get_task_queue)]
 LLM = Annotated[LLMClient, Depends(get_llm)]
 Recorder = Annotated[AIUsageRecorder, Depends(get_recorder)]
+
+
+async def rate_limit_sessions(request: Request, response: Response, user: CurrentUser) -> None:
+    """Session starts: N per user per hour (SECURITY_MODEL 5.1)."""
+    settings: Settings = request.app.state.settings
+    await _enforce_rate_limit(
+        request,
+        response,
+        subject=str(user.id),
+        scope="session_start",
+        limit=settings.rate_limit_sessions_per_hour,
+        window_seconds=3600,
+    )
+
+
+def get_session_manager(request: Request) -> SessionManager:
+    """Built per request from app state so tests can swap the LLM / stores after startup."""
+    state = request.app.state
+    return SessionManager(
+        settings=state.settings,
+        sessionmaker=state.sessionmaker,
+        llm=state.llm,
+        recorder=state.ai_recorder,
+        prompts=get_prompt_manager(),
+        redis=state.redis,
+        vectors=state.vector_store,
+    )
+
+
+Sessions = Annotated[SessionManager, Depends(get_session_manager)]

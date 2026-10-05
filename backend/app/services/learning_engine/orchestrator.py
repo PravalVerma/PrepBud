@@ -112,8 +112,12 @@ class Decision:
 
 
 def elapsed_minutes(state: SessionState, now: datetime) -> float:
+    """Active study time: wall-clock since start minus time spent paused."""
     started = datetime.fromisoformat(state["started_at"])
-    return max(0.0, (now - started).total_seconds() / 60)
+    paused = float(state.get("paused_seconds") or 0.0)
+    if state.get("paused_at"):
+        paused += max(0.0, (now - datetime.fromisoformat(str(state["paused_at"]))).total_seconds())
+    return max(0.0, ((now - started).total_seconds() - paused) / 60)
 
 
 def initial_action(state: SessionState, concept_id: str, cfg: LearningEngineSettings) -> str:
@@ -465,7 +469,7 @@ class SessionEngine:
         state["review_concepts"] = [str(c) for c in selection.review_ids]
         state["concepts_remaining"] = targets[1:]
         state["current_concept_id"] = targets[0]
-        state["status"] = "active"
+        state["status"] = "initialising" if state.get("plan_only") else "active"
         actions = {c: initial_action(state, c, self.cfg) for c in targets}
         state["objective"] = {
             "target_concepts": [
@@ -474,6 +478,7 @@ class SessionEngine:
                     "name": info[c]["name"],
                     "action": {"explain": "teach"}.get(actions[c], actions[c]),
                     "reason": selection.reasons[uuid.UUID(c)],
+                    "mastery": round(state["mastery_snapshot"][c], 4),
                 }
                 for c in targets
             ],
@@ -492,6 +497,12 @@ class SessionEngine:
             "session_started",
             {"session_id": state["session_id"], "objective": state["objective"]},
         )
+        return state
+
+    async def begin(self, state: SessionState) -> SessionState:
+        """First action of a session created with ``plan_only`` (the client is now listening)."""
+        state["plan_only"] = False
+        state["status"] = "active"
         return state
 
     async def acknowledge(self, state: SessionState) -> SessionState:
@@ -1069,16 +1080,21 @@ class SessionEngine:
 
     @staticmethod
     def route_entry(state: SessionState) -> str:
-        if state["status"] == "initialising":
+        if not state["target_concepts"]:
             return "init"
         kind = (state.get("pending_input") or {}).get("type")
         return {
+            "begin": "begin",
             "end_session": "wrap",
             "student_question": "respond",
             "request_hint": "respond",
             "student_acknowledge": "acknowledge",
             "student_response": "evaluate",
         }.get(kind or "", END)
+
+    @staticmethod
+    def route_after_plan(state: SessionState) -> str:
+        return END if state.get("plan_only") else SessionEngine.route_action(state)
 
     @staticmethod
     def route_action(state: SessionState) -> str:
@@ -1090,6 +1106,7 @@ class SessionEngine:
         for name in (
             "init",
             "plan",
+            "begin",
             "acknowledge",
             "decide",
             "explain",
@@ -1106,7 +1123,7 @@ class SessionEngine:
         for action in ("explain", "practice", "review", "wrap"):
             targets[action] = action
         entry: dict[Hashable, str] = {END: END}
-        for node in ("init", "wrap", "respond", "acknowledge", "evaluate"):
+        for node in ("init", "begin", "wrap", "respond", "acknowledge", "evaluate"):
             entry[node] = node
         g.add_conditional_edges(
             START,
@@ -1114,7 +1131,8 @@ class SessionEngine:
             entry,
         )
         g.add_edge("init", "plan")
-        g.add_conditional_edges("plan", self.route_action, targets)
+        g.add_conditional_edges("plan", self.route_after_plan, {**targets, END: END})
+        g.add_conditional_edges("begin", self.route_action, targets)
         g.add_conditional_edges("acknowledge", self.route_action, targets)
         g.add_conditional_edges("decide", self.route_action, targets)
         g.add_edge("evaluate", "update")

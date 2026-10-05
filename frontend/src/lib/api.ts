@@ -33,6 +33,15 @@ import type {
   UploadUrlRequest,
   UploadUrlResponse,
 } from "@/types/domain";
+import type {
+  SessionCreate,
+  SessionCreated,
+  SessionDetail,
+  SessionListItem,
+  SessionStatus,
+  SessionView,
+  WsTicket,
+} from "@/types/session";
 
 export const API_BASE = "/api/backend";
 
@@ -178,4 +187,15 @@ export const api = {
       concept_id?: string;
     },
   ) => request<PaginatedEnvelope<SearchHit>>("GET", `/search${query(params)}`),
+
+  // Learning sessions (API_CONTRACT §3.8–3.9)
+  createSession: (body: SessionCreate) => data<SessionCreated>("POST", "/sessions", body),
+  listSessions: (params?: PageParams & { status?: SessionStatus }) =>
+    request<PaginatedEnvelope<SessionListItem>>("GET", `/sessions${query(params)}`),
+  getSession: (id: string) => data<SessionDetail>("GET", `/sessions/${id}`),
+  endSession: (id: string) => data<SessionView>("POST", `/sessions/${id}/end`),
+  pauseSession: (id: string) => data<SessionView>("POST", `/sessions/${id}/pause`),
+  resumeSession: (id: string) => data<SessionView>("POST", `/sessions/${id}/resume`),
+  /** Single-use, short-lived ticket for opening the session WebSocket. */
+  getWsTicket: (id: string) => data<WsTicket>("POST", `/sessions/${id}/ws-ticket`),
 };

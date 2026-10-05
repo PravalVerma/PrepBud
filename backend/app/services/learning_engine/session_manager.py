@@ -298,9 +298,7 @@ class SessionManager:
 
     # ---- lifecycle ------------------------------------------------------------------------------
 
-    async def start(
-        self, user_id: uuid.UUID, req: StartSessionRequest, *, emit: Emitter | None = None
-    ) -> TurnResult:
+    async def _create_row(self, user_id: uuid.UUID, req: StartSessionRequest) -> uuid.UUID:
         async with self.sessionmaker() as db:
             if (
                 req.learning_goal_id is not None
@@ -334,8 +332,16 @@ class SessionManager:
             )
             db.add(row)
             await db.commit()
-            session_id = row.id
+            return row.id
 
+    async def create(
+        self, user_id: uuid.UUID, req: StartSessionRequest, *, emit: Emitter | None = None
+    ) -> TurnResult:
+        """INIT + PLAN only (no AI calls): returns the objective, status ``initialising``.
+
+        The first explanation or question is produced by `begin`, once the client listens.
+        """
+        session_id = await self._create_row(user_id, req)
         state = new_state(
             session_id=session_id,
             user_id=user_id,
@@ -347,7 +353,8 @@ class SessionManager:
             requested_concepts=list(req.concept_ids),
             started_at=self.now(),
         )
-        ai = await self._context(user_id, session_id, "session_start")
+        state["plan_only"] = True
+        ai = await self._context(user_id, session_id, "session_plan")
         status = "failed"
         try:
             async with self.sessionmaker() as db:
@@ -359,14 +366,36 @@ class SessionManager:
         except SessionPlanningError as exc:
             await self._discard(user_id, session_id)
             raise UnprocessableEntityError(str(exc), details={"reason": "NO_CONCEPTS"}) from exc
-        except LLMError as exc:
-            await self._discard(user_id, session_id)
-            raise ServiceUnavailableError(
-                ERROR_MESSAGES.get(exc.code, "The AI service could not start the session."),
-                details={"reason": exc.code},
-            ) from exc
         finally:
             await self.recorder.finish_trace(ai.trace_id, status)  # type: ignore[arg-type]
+
+    async def begin(
+        self, user_id: uuid.UUID, session_id: uuid.UUID, *, emit: Emitter | None = None
+    ) -> TurnResult:
+        """Run the first action of a planned session; for a running one, re-send the view."""
+        token = await self._lock(session_id)
+        if token is None:
+            raise ConflictError("The session is busy with another message; try again")
+        try:
+            return await self._turn(user_id, session_id, {"type": "begin", "payload": {}}, emit)
+        finally:
+            await self._unlock(session_id, token)
+
+    async def start(
+        self, user_id: uuid.UUID, req: StartSessionRequest, *, emit: Emitter | None = None
+    ) -> TurnResult:
+        """`create` + `begin` in one call; an AI failure discards the new session (503)."""
+        created = await self.create(user_id, req, emit=emit)
+        result = await self.begin(user_id, created.session_id, emit=emit)
+        error = next((e for e in result.events if e["type"] == "error"), None)
+        if error is not None:
+            await self._discard(user_id, created.session_id)
+            code = error["payload"]["code"]
+            raise ServiceUnavailableError(
+                ERROR_MESSAGES.get(code, "The AI service could not start the session."),
+                details={"reason": code},
+            )
+        return result
 
     async def _discard(self, user_id: uuid.UUID, session_id: uuid.UUID) -> None:
         async with self.sessionmaker() as db:
@@ -389,6 +418,69 @@ class SessionManager:
             or 0
         )
 
+    # ---- pause / resume -------------------------------------------------------------------
+
+    def _apply_pause(self, state: SessionState) -> None:
+        state["status"] = "paused"
+        state["paused_at"] = self.now().isoformat()
+        state["log"].append({"event_type": "session_paused", "concept_id": None, "payload": {}})
+
+    def _apply_unpause(self, state: SessionState) -> None:
+        paused_at = state.get("paused_at")
+        if paused_at:
+            gap = (self.now() - datetime.fromisoformat(str(paused_at))).total_seconds()
+            total = float(state.get("paused_seconds") or 0) + max(0.0, gap)
+            state["paused_seconds"] = round(total, 1)
+        state["paused_at"] = None
+        state["status"] = "active"
+        state["log"].append({"event_type": "session_resumed", "concept_id": None, "payload": {}})
+
+    async def _transition(
+        self, user_id: uuid.UUID, session_id: uuid.UUID, change: Callable[[SessionState], bool]
+    ) -> None:
+        token = await self._lock(session_id)
+        if token is None:
+            raise ConflictError("The session is busy with another message; try again")
+        try:
+            async with self.sessionmaker() as db:
+                row = await self._row(db, user_id, session_id)
+                if row.status in ("completed", "abandoned"):
+                    raise ConflictError("This session has ended", details={"status": row.status})
+                state = await self.load_state(row)
+                if state is None:
+                    raise ConflictError("The session state could not be recovered")
+                if change(state):
+                    state["turn"] += 1
+                    await self._persist(db, row, state)
+        finally:
+            await self._unlock(session_id, token)
+
+    async def pause(self, user_id: uuid.UUID, session_id: uuid.UUID) -> TurnResult:
+        """Stop the clock (the student left or the connection dropped). Idempotent."""
+
+        def change(state: SessionState) -> bool:
+            if state["status"] != "active":
+                return False
+            self._apply_pause(state)
+            return True
+
+        await self._transition(user_id, session_id, change)
+        return await self.resume(user_id, session_id)
+
+    async def unpause(self, user_id: uuid.UUID, session_id: uuid.UUID) -> TurnResult:
+        """Restart the clock and return what the student should see. Idempotent."""
+
+        def change(state: SessionState) -> bool:
+            if state["status"] != "paused":
+                return False
+            self._apply_unpause(state)
+            return True
+
+        await self._transition(user_id, session_id, change)
+        return await self.resume(user_id, session_id)
+
+    # ---- turns ---------------------------------------------------------------------------
+
     async def handle(
         self,
         user_id: uuid.UUID,
@@ -401,13 +493,20 @@ class SessionManager:
         if token is None:
             raise ConflictError("The session is busy with another message; try again")
         try:
-            return await self._handle(user_id, session_id, msg, emit)
+            return await self._turn(user_id, session_id, msg.model_dump(), emit, msg=msg)
         finally:
             await self._unlock(session_id, token)
 
-    async def _handle(
-        self, user_id: uuid.UUID, session_id: uuid.UUID, msg: ClientMessage, emit: Emitter | None
+    async def _turn(
+        self,
+        user_id: uuid.UUID,
+        session_id: uuid.UUID,
+        pending: dict[str, Any],
+        emit: Emitter | None,
+        *,
+        msg: ClientMessage | None = None,
     ) -> TurnResult:
+        kind = pending["type"]
         async with self.sessionmaker() as db:
             row = await self._row(db, user_id, session_id)
             if row.status in ("completed", "abandoned"):
@@ -415,23 +514,45 @@ class SessionManager:
             state = await self.load_state(row)
             if state is None:
                 raise ConflictError("The session state could not be recovered")
-            validate_message(state, msg)
+            if kind == "begin" and not state.get("plan_only"):
+                return await self.resume(user_id, session_id)  # already begun
+            if msg is not None:
+                if state.get("plan_only") and msg.type != "end_session":
+                    raise ConflictError(
+                        "The session has not started yet", details={"awaiting": "begin"}
+                    )
+                validate_message(state, msg)
+            if state["status"] == "paused":
+                self._apply_unpause(state)  # any activity resumes a paused session
             pristine = copy.deepcopy(state)
 
             over_budget = (
                 await self._tokens_used(db, session_id) >= self.settings.ai_session_token_budget
             )
-            if over_budget and msg.type != "end_session":
+            notice: dict[str, Any] | None = None
+            if over_budget and kind != "end_session":
                 state["end_reason"] = "token_budget"
                 state["no_llm"] = True
-                msg = ClientMessage(type="end_session")
-            state["pending_input"] = msg.model_dump()
+                pending = {"type": "end_session", "payload": {}}
+                notice = {
+                    "type": "error",
+                    "payload": {
+                        "code": "SESSION_TOKEN_BUDGET",
+                        "message": (
+                            "This session has reached its AI usage limit, so we are wrapping up."
+                        ),
+                        "retryable": False,
+                    },
+                }
+                if emit is not None:
+                    await emit(notice)
+            state["pending_input"] = pending
             state["outbox"] = []
             state["turn"] += 1
-            if msg.type != "end_session":
+            if pending["type"] not in ("end_session", "begin"):
                 state["interaction_count"] += 1
 
-            ai = await self._context(user_id, session_id, f"session_{msg.type}")
+            ai = await self._context(user_id, session_id, f"session_{pending['type']}")
             try:
                 state = await self._engine(db, ai, emit).run_turn(state)
             except LLMError as exc:
@@ -440,18 +561,8 @@ class SessionManager:
                 return await self._on_ai_failure(user_id, session_id, pristine, exc, emit)
             await self._persist(db, row, state)
             await self.recorder.finish_trace(ai.trace_id, "completed")
-            if over_budget:
-                notice = {
-                    "type": "error",
-                    "payload": {
-                        "code": "SESSION_TOKEN_BUDGET",
-                        "message": (
-                            "This session has reached its AI usage limit, so we're wrapping up."
-                        ),
-                    },
-                }
-                return self._result(session_id, state, [notice, *state["outbox"]])
-            return self._result(session_id, state)
+            events = state["outbox"] if notice is None else [notice, *state["outbox"]]
+            return self._result(session_id, state, events)
 
     async def _on_ai_failure(
         self,
@@ -461,18 +572,20 @@ class SessionManager:
         exc: LLMError,
         emit: Emitter | None,
     ) -> TurnResult:
+        transient = exc.retryable and not isinstance(exc, AIBudgetExceededError)
+        if transient:
+            message = ERROR_MESSAGES.get(exc.code, "Something went wrong with the AI service.")
+        elif isinstance(exc, AIBudgetExceededError):
+            message = "Your daily AI budget has been reached, so we are wrapping up for today."
+        else:
+            message = "The AI service is not responding properly, so we are wrapping up."
         error = {
             "type": "error",
-            "payload": {
-                "code": exc.code,
-                "message": ERROR_MESSAGES.get(
-                    exc.code, "Something went wrong with the AI service."
-                ),
-            },
+            "payload": {"code": exc.code, "message": message, "retryable": transient},
         }
         if emit is not None:
             await emit(error)
-        if exc.retryable and not isinstance(exc, AIBudgetExceededError):
+        if transient:
             logger.warning(
                 "session turn failed; state kept for retry",
                 extra={"session_id": str(session_id), "error": exc.code},
@@ -491,14 +604,6 @@ class SessionManager:
         state["end_reason"] = (
             "ai_budget_exceeded" if isinstance(exc, AIBudgetExceededError) else "ai_unavailable"
         )
-        error["payload"] = {
-            "code": exc.code,
-            "message": (
-                "Your daily AI budget has been reached, so we're wrapping up for today."
-                if isinstance(exc, AIBudgetExceededError)
-                else "The AI service isn't responding properly, so we're wrapping up this session."
-            ),
-        }
         ai = await self._context(user_id, session_id, "session_end_after_error")
         async with self.sessionmaker() as db:
             state = await self._engine(db, ai, emit).run_turn(state)

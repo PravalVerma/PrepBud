@@ -237,7 +237,10 @@ class TestRouting:
         assert SessionEngine.route_entry(state(pending_input={"type": kind})) == node
 
     def test_new_session_starts_at_init(self) -> None:
-        assert SessionEngine.route_entry(state(status="initialising")) == "init"
+        assert SessionEngine.route_entry(state(target_concepts=[])) == "init"
+        planned = state(status="initialising", plan_only=True, pending_input={"type": "begin"})
+        assert SessionEngine.route_entry(planned) == "begin"
+        assert SessionEngine.route_after_plan(planned) == "__end__"
 
     def test_unknown_input_ends(self) -> None:
         from langgraph.graph import END

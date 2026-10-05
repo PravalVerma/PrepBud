@@ -117,6 +117,12 @@ export function ConceptDetailView({ id }: { id: string }) {
             <Badge className="bg-brand-50 text-brand-700">
               Mastery {formatPercent(mastery.level)} · {mastery.label}
             </Badge>
+            <Link
+              href={`/session?concept_id=${concept.id}`}
+              className="rounded-full bg-brand-600 px-3 py-0.5 text-xs font-medium text-white hover:bg-brand-700"
+            >
+              Study this concept
+            </Link>
           </div>
         </div>
         <dl className="mt-4 grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">

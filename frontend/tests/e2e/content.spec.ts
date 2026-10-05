@@ -6,22 +6,9 @@
  * The real pipeline runs: browser → presigned PUT to S3 → Celery worker → text
  * extraction + chunking → OpenAI-compatible LLM (local mock) → PostgreSQL + Qdrant.
  */
-import path from "node:path";
+import { expect, test } from "@playwright/test";
 
-import { expect, type Page, test } from "@playwright/test";
-
-const PDF = path.join(__dirname, "fixtures", "calculus.pdf");
-
-async function signUp(page: Page): Promise<void> {
-  const email = `e2e-content-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@example.com`;
-  await page.goto("/login");
-  await page.getByRole("tab", { name: "Create account" }).click();
-  await page.getByLabel("Your name").fill("Content Tester");
-  await page.getByLabel("Email").fill(email);
-  await page.getByLabel("Password").fill("correct-horse-battery");
-  await page.getByRole("button", { name: "Create account" }).click();
-  await expect(page).toHaveURL(/\/dashboard$/);
-}
+import { CALCULUS_PDF as PDF, signUp } from "./support/journey";
 
 test("upload a PDF, watch it process, explore its concepts", async ({ page }) => {
   test.setTimeout(120_000);

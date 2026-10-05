@@ -1,7 +1,7 @@
 # API Contract — School in a Box
 
 > **Version:** 0.1.0-draft  
-> **Last updated:** 2026-09-17  
+> **Last updated:** 2026-10-05  
 > **Status:** Pre-implementation / Architecture Phase
 
 ---
@@ -499,9 +499,16 @@ Delete a goal.
 
 ### 3.8 Learning Sessions
 
+A session is created in two steps:
+
+1. `POST /sessions` plans it. This is fast and makes no LLM calls.
+2. Opening a channel starts teaching. The channel is the WebSocket (§3.9) or an SSE `begin` turn.
+
+The same message protocol runs over both channels.
+
 #### `POST /sessions`
 
-Start a new learning session.
+Plan a new learning session. Rate limit: 10 per user per hour.
 
 **Request:**
 ```json
@@ -509,11 +516,19 @@ Start a new learning session.
   "session_type": "mixed",
   "learning_goal_id": "uuid",
   "time_budget_minutes": 30,
+  "concept_ids": ["uuid"],
   "preferences": {
     "max_concepts": 3
   }
 }
 ```
+
+Field rules:
+
+- Every field is optional.
+- `session_type` is one of `teach | practice | review | mixed`.
+- `time_budget_minutes` is between 5 and 180.
+- `concept_ids` (at most 10) lets the student choose the concepts. Otherwise they are selected from mastery and due reviews.
 
 **Response 201:**
 ```json
@@ -524,7 +539,7 @@ Start a new learning session.
     "websocket_url": "/api/v1/sessions/uuid/ws",
     "objective": {
       "target_concepts": [
-        {"id": "uuid", "name": "Quadratic Formula", "action": "teach"}
+        {"id": "uuid", "name": "Quadratic Formula", "action": "teach", "reason": "new", "mastery": 0.0}
       ],
       "session_type": "mixed",
       "estimated_duration_minutes": 25
@@ -533,27 +548,127 @@ Start a new learning session.
 }
 ```
 
+`mastery` is the concept's mastery when the session starts. Clients use it as the baseline of the live mastery display.
+
+Errors:
+
+- `404` if the learning goal is not found.
+- `422 UNPROCESSABLE_ENTITY` with `details.reason = "NO_CONCEPTS"` when there is nothing to study.
+- `429` when the rate limit is exceeded.
+
 #### `GET /sessions`
 
-List past sessions.
+List past and current sessions, newest first.
 
 **Query params:** `?status=completed&page=1&per_page=10`
 
+`status` is one of `initialising | active | paused | completed | abandoned`.
+
+Each item contains:
+
+- `id`, `session_type`, `status`
+- `started_at`, `ended_at`, `duration_seconds`
+- `interaction_count`
+- `concepts`: the target concept names
+- `summary`: `null` until the session ends
+
 #### `GET /sessions/{session_id}`
 
-Get session details including events and summary.
+Get session details. The response contains the list item fields, plus:
+
+- `learning_goal_id`, `objective`
+- `awaiting`
+- `current_question`: the public form, without the answer
+- `events`: the session event log, up to 500 entries of `{index, type, concept_id, payload, created_at}`
 
 #### `POST /sessions/{session_id}/end`
 
-End an active session.
+End the session. The student's mastery is updated, reviews are scheduled, and the summary is written. Returns a **session view** whose `events` contain `session_ended`. Any message to an ended session, `end` included, returns `409 CONFLICT` (`details.status`).
+
+#### `POST /sessions/{session_id}/pause` · `POST /sessions/{session_id}/resume`
+
+Pause and resume are idempotent.
+
+- **Pause:** paused time does not count against the time budget. A dropped WebSocket pauses the session automatically.
+- **Resume:** the response's `events` re-send what the student was looking at: the open question, or the explanation awaiting acknowledgement. Any message also resumes a paused session.
+
+**Session view** is the response of end, pause, resume and JSON-mode messages, and the payload of `turn_complete`:
+```json
+{
+  "session_id": "uuid",
+  "status": "active",
+  "awaiting": "answer",
+  "objective": { "...": "as above" },
+  "current_question": {"question_id": "uuid", "type": "mcq", "content": "...", "options": [{"label": "A", "text": "..."}], "hints_available": 2},
+  "current_concept_id": "uuid",
+  "interaction_count": 4,
+  "summary": null,
+  "events": []
+}
+```
+
+`awaiting` says which message the session will accept next:
+
+| `awaiting` | Accepted messages |
+|---|---|
+| `none` | `begin` (not started yet) |
+| `acknowledgement` | `student_acknowledge`, `student_question` |
+| `answer` | `student_response`, `request_hint`, `student_question` |
+| `ended` | none |
+
+`end_session` is accepted at any time.
+
+#### `POST /sessions/{session_id}/ws-ticket`
+
+Issue a single-use WebSocket ticket. It exists because browsers cannot send an `Authorization` header on a WebSocket. In this app the browser never holds the JWT at all: the Next.js BFF requests the ticket.
+
+```json
+{"data": {"ticket": "<opaque>", "expires_in_seconds": 60, "websocket_path": "/api/v1/sessions/uuid/ws"}}
+```
+
+The ticket is bound to the user and to this session. It is valid for `WS_TICKET_TTL_SECONDS` (default 60) and can be redeemed once. Requesting a ticket for an ended session returns `409`.
+
+#### `POST /sessions/{session_id}/messages` (SSE)
+
+Runs one turn over HTTP. Use it where a WebSocket is not possible, for example through the BFF.
+
+**Body:** a client message (§3.9), or `{"type": "begin"}`. `begin` starts a planned session; on a running session it re-sends the current view.
+
+**Response:**
+
+- **With `Accept: text/event-stream`:** the turn's events as server-sent events (`event: <type>` / `data: <payload JSON>`). Explanation chunks are sent as they are generated. The stream ends with `turn_complete`, carrying the session view, or with `error`.
+- **Without it:** JSON `{"data": <session view>}`, with explanation chunks merged.
+
+The turn completes even if the client disconnects. A message that does not fit `awaiting` returns `409 CONFLICT` with `details.awaiting`.
 
 ---
 
 ### 3.9 Session WebSocket
 
-#### `WS /sessions/{session_id}/ws`
+#### `WS /sessions/{session_id}/ws?ticket=<ticket>`
 
 Real-time bidirectional communication for learning sessions.
+
+**Connecting:**
+
+- The handshake is rejected (close code `1008`) in any of these cases:
+  - the ticket is missing, unknown, expired, already used, or issued for another session;
+  - the user is inactive;
+  - the `Origin` header is not in the API's allowed origins (`FRONTEND_URL`).
+- On connect, the server opens the channel:
+  - a planned session starts, and its first explanation streams;
+  - a paused session resumes;
+  - a running session re-sends its current view.
+- After that, every turn ends with a `turn_complete` event carrying the session view.
+- When the session ends, the server sends `session_ended` and `turn_complete`, then closes with `1000`.
+- If the connection drops, the session is paused. The client reconnects with a fresh ticket.
+
+**Keep-alive and limits:**
+
+- `{"type": "ping"}` is answered with `{"type": "pong", "payload": {}}`. Pings do not count toward the rate limit.
+- Clients may send at most 60 messages per user per minute. Beyond that, the server replies with an `error` event (`RATE_LIMITED`) and keeps the connection open.
+- Invalid JSON or an invalid message gets an `error` event (`VALIDATION_ERROR`).
+- An out-of-order message gets an `error` event (`CONFLICT`, with `awaiting`). The connection stays open.
 
 **Client → Server Messages:**
 
@@ -686,13 +801,16 @@ Real-time bidirectional communication for learning sessions.
 }
 ```
 
-#### Session protocol — implementation notes (Phase 4)
+#### Session protocol — implementation notes (Phases 4–5)
 
-The learning engine (`app/services/learning_engine/`) implements this protocol. Phase 5 exposes it over the WebSocket. Additions to the message lists above:
+The learning engine (`app/services/learning_engine/`) implements this protocol. Phase 5 exposes it over the WebSocket and SSE (above). Additions to the message lists above:
 
 - **Client → server, `request_hint`:** `{"type": "request_hint", "payload": {}}`, valid while a question is open.
 - **Client → server, `student_response`:** may include `time_taken_seconds` (non-negative integer), used for fatigue detection.
 - **Server → client, `session_started`:** `{"session_id", "objective"}`. It is the first event of a new session.
+- **Server → client, `turn_complete`:** the session view (§3.8). It is the last event of every turn.
+- **Server → client, `error`:** adds `retryable` (boolean). For a rejected message it also includes the details, for example `awaiting`.
+- **Client → server, `ping`:** answered with `pong`.
 - **Server → client, `tutor_message`:** `{"kind": "encouragement" | "no_more_hints", "content"}`, for example when the frustration guard activates.
 - **Server → client, `explanation_start`:** carries `kind`: `intro | retry | worked_example | socratic | followup | resume`.
 - **Server → client, `question`:** carries `mode` (`practice | review`). Options never reveal which one is correct.

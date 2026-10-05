@@ -40,6 +40,7 @@ dev = [
     "fpdf2>=2.8",
     "boto3-stubs[s3]>=1.35",
     "celery-types>=0.22",
+    "httpx-ws>=0.7",
 ]
 
 [build-system]

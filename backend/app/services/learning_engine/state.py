@@ -84,6 +84,9 @@ class SessionState(TypedDict, total=False):
     time_budget_minutes: int
     max_concepts: int
     started_at: str
+    plan_only: bool  # create the plan, defer the first action to `begin`
+    paused_at: str | None
+    paused_seconds: float
     # student model
     student_profile: dict[str, Any]
     mastery_snapshot: dict[str, float]
@@ -155,6 +158,9 @@ def new_state(
         time_budget_minutes=time_budget_minutes,
         max_concepts=max_concepts,
         started_at=started_at.isoformat(),
+        plan_only=False,
+        paused_at=None,
+        paused_seconds=0.0,
         student_profile={},
         mastery_snapshot={},
         initial_mastery={},

@@ -209,6 +209,11 @@ class Settings(BaseSettings):
     health_check_timeout_seconds: float = 2.0
 
     rate_limit_uploads_per_hour: int = 5
+    # SECURITY_MODEL 5.1: session starts per hour, WebSocket messages per minute.
+    rate_limit_sessions_per_hour: int = 10
+    rate_limit_ws_messages_per_minute: int = 60
+    # Single-use WebSocket tickets (the browser never holds the JWT).
+    ws_ticket_ttl_seconds: int = 60
 
     # --- Vector store (Qdrant) -------------------------------------------------
     qdrant_url: str = ""

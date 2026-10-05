@@ -139,15 +139,14 @@ class TestStart:
         db: AsyncSession,
     ) -> None:
         user_id = concepts["Limits"].user_id
-        result = await session_manager.start(user_id, StartSessionRequest(session_type="mixed"))
+        created = await session_manager.create(user_id, StartSessionRequest(session_type="mixed"))
+        # Creating only plans (no AI calls): objective known, nothing taught yet.
+        assert created.status == "initialising" and created.awaiting == "none"
+        assert types(created) == ["session_started"]
+        result = await session_manager.begin(user_id, created.session_id)
 
         assert result.status == "active" and result.awaiting == "acknowledgement"
-        assert types(result) == [
-            "session_started",
-            "explanation_start",
-            "explanation_chunk",
-            "explanation_end",
-        ]
+        assert types(result) == ["explanation_start", "explanation_chunk", "explanation_end"]
         targets = [t["name"] for t in result.objective["target_concepts"]]
         # Derivatives is blocked by its prerequisite; weakest teachable first, easier first on ties.
         assert targets == ["Limits", "Vectors"]
@@ -168,11 +167,19 @@ class TestStart:
             await db.scalars(select(SessionEvent.event_type).order_by(SessionEvent.event_index))
         ).all()
         assert logged == ["concept_changed", "explanation_given"]
-        trace = await db.scalar(select(AITrace).where(AITrace.session_id == result.session_id))
-        assert (
-            trace is not None and trace.operation == "session_start" and trace.status == "completed"
-        )
-        assert (await state_of(app, result.session_id))["turn"] == 0
+        traces = (
+            await db.scalars(
+                select(AITrace.operation).where(
+                    AITrace.session_id == result.session_id, AITrace.status == "completed"
+                )
+            )
+        ).all()
+        assert sorted(traces) == ["session_begin", "session_plan"]
+        assert (await state_of(app, result.session_id))["turn"] == 1
+        # begin on a running session only re-sends the view
+        again = await session_manager.begin(user_id, created.session_id)
+        assert types(again) == ["explanation_start", "explanation_chunk", "explanation_end"]
+        assert (await state_of(app, result.session_id))["turn"] == 1
 
     async def test_explicit_concepts_start_with_their_prerequisites(
         self, session_manager: SessionManager, concepts: dict[str, Concept]
@@ -545,7 +552,7 @@ class TestRecovery:
 
         after = await answer(restarted, user_id, resumed, correct_answer(open_question))
         assert event(after, "evaluation")["is_correct"]
-        assert (await state_of(app, result.session_id))["turn"] == 1  # Redis repopulated
+        assert (await state_of(app, result.session_id))["turn"] == 2  # Redis repopulated
 
     async def test_stale_redis_copy_is_ignored(
         self, app: FastAPI, session_manager: SessionManager, concepts: dict[str, Concept]
@@ -668,9 +675,12 @@ class TestContentAndReuse:
             "---MATERIAL---" in prompt and "Photosynthesis is studied by working through" in prompt
         )
         assert (explanation.metadata_ or {})["prompt_name"] == "tutor/explain_concept"
-        assert explanation.trace_id == (
-            await db.scalar(select(AITrace.id).where(AITrace.session_id == result.session_id))
+        begin_trace = await db.scalar(
+            select(AITrace.id).where(
+                AITrace.session_id == result.session_id, AITrace.operation == "session_begin"
+            )
         )
+        assert explanation.trace_id == begin_trace
 
     async def test_stored_questions_are_reused_across_sessions(
         self,

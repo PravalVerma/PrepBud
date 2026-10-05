@@ -30,6 +30,7 @@ const backendEnv = {
   FRONTEND_URL: baseURL,
   RATE_LIMIT_PER_MINUTE: "1000",
   RATE_LIMIT_UPLOADS_PER_HOUR: "1000",
+  RATE_LIMIT_SESSIONS_PER_HOUR: "1000",
   LOG_LEVEL: "INFO",
   CELERY_QUEUE: "e2e",
   // Hermetic: override every AI setting a developer's .env might set (provider, models, size).

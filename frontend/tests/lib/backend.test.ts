@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { buildBackendUrl, forwardToBackend } from "@/lib/backend";
+import { buildBackendUrl, forwardToBackend, timeoutFor } from "@/lib/backend";
 
 const BASE = "http://api.local/api/v1";
 
@@ -143,5 +143,41 @@ describe("forwardToBackend", () => {
     });
     expect(res.status).toBe(404);
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+});
+
+describe("session turns", () => {
+  it("gives AI turns a longer timeout than plain calls", () => {
+    expect(timeoutFor(["sessions", "s1", "messages"])).toBeGreaterThan(timeoutFor(["sessions"]));
+    expect(timeoutFor(["sessions", "s1", "end"])).toBe(timeoutFor(["sessions", "s1", "messages"]));
+    expect(timeoutFor(["sessions", "s1"])).toBe(timeoutFor(["profile"]));
+  });
+
+  it("pipes server-sent events through unbuffered", async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('event: explanation_chunk\ndata: {"content":"Hi"}\n\n'));
+        controller.enqueue(new TextEncoder().encode("event: turn_complete\ndata: {}\n\n"));
+        controller.close();
+      },
+    });
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response(stream, { status: 200, headers: { "Content-Type": "text/event-stream" } }));
+    const res = await forwardToBackend({
+      request: new Request("http://web/api/backend/sessions/s1/messages", {
+        method: "POST",
+        headers: { Accept: "text/event-stream", "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "begin" }),
+      }),
+      path: ["sessions", "s1", "messages"],
+      token: "t",
+      baseUrl: BASE,
+      fetchImpl,
+    });
+    expect(new Headers(fetchImpl.mock.calls[0][1]?.headers).get("accept")).toBe("text/event-stream");
+    expect(res.headers.get("content-type")).toBe("text/event-stream");
+    expect(res.headers.get("x-accel-buffering")).toBe("no");
+    expect(await res.text()).toContain("event: turn_complete");
   });
 });

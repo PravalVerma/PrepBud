@@ -14,6 +14,12 @@ function read(name: string): string {
   return value;
 }
 
+/** `https://api.example.com/api/v1` → `wss://api.example.com` */
+export function toWsOrigin(url: string): string {
+  const { protocol, host } = new URL(url);
+  return `${protocol === "https:" || protocol === "wss:" ? "wss" : "ws"}://${host}`;
+}
+
 export const env = {
   get supabaseUrl(): string {
     return read("SUPABASE_URL");
@@ -24,6 +30,14 @@ export const env = {
   /** FastAPI base URL including the version prefix, e.g. http://localhost:8000/api/v1 */
   get apiUrl(): string {
     return read("API_URL").replace(/\/+$/, "");
+  },
+  /**
+   * ws(s):// origin the *browser* uses for session WebSockets (the BFF cannot proxy them).
+   * `PUBLIC_API_URL` when the API's public address differs from `API_URL` (e.g. API_URL is
+   * an internal hostname); otherwise derived from `API_URL`.
+   */
+  get wsUrl(): string {
+    return toWsOrigin(process.env.PUBLIC_API_URL || read("API_URL"));
   },
   /** Public origin used in e-mail links; falls back to the request origin when unset. */
   get siteUrl(): string | undefined {

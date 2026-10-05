@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 
 import { PlaceholderCard } from "@/components/dashboard/placeholder-card";
+import { RecentSessionsCard } from "@/components/dashboard/recent-sessions-card";
 import { SubjectsCard } from "@/components/dashboard/subjects-card";
 import { WelcomeBanner } from "@/components/dashboard/welcome-banner";
 
@@ -17,7 +18,7 @@ export default function DashboardPage() {
           phase={7}
         />
         <PlaceholderCard title="Due for review" description="Spaced-repetition items for today." phase={6} />
-        <PlaceholderCard title="Recent sessions" description="Pick up where you left off." phase={5} />
+        <RecentSessionsCard />
       </div>
       <SubjectsCard />
     </div>
