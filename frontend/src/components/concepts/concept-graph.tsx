@@ -30,7 +30,12 @@ export interface PlacedNode {
  * Layered layout: the concept in the middle, prerequisites to the left (one column per
  * step), dependents to the right; other relationships sit next to their neighbour.
  */
-export function layoutGraph(graph: Graph, targetId: string): { nodes: PlacedNode[]; width: number; height: number } {
+export function layoutGraph(input: Graph, targetId: string): { nodes: PlacedNode[]; width: number; height: number } {
+  // Tolerate a malformed payload rather than crashing the concept page.
+  const graph: Graph = {
+    nodes: Array.isArray(input?.nodes) ? input.nodes : [],
+    edges: Array.isArray(input?.edges) ? input.edges : [],
+  };
   const layer = new Map<string, number>([[targetId, 0]]);
   for (let pass = 0; pass < graph.nodes.length + 1; pass++) {
     let changed = false;
@@ -109,7 +114,7 @@ export function ConceptGraphView({ conceptId }: { conceptId: string }) {
         <Skeleton className="h-48 w-full" />
       ) : error || !layout || !data ? (
         <Alert tone="error">The concept map is unavailable right now.</Alert>
-      ) : data.nodes.length <= 1 ? (
+      ) : layout.nodes.length <= 1 ? (
         <p className="text-sm text-slate-500">No linked concepts yet.</p>
       ) : (
         <>
@@ -119,7 +124,7 @@ export function ConceptGraphView({ conceptId }: { conceptId: string }) {
               height={layout.height}
               viewBox={`0 0 ${layout.width} ${layout.height}`}
               role="group"
-              aria-label={`Concept map with ${data.nodes.length} concepts`}
+              aria-label={`Concept map with ${layout.nodes.length} concepts`}
               className="mx-auto block"
             >
               <defs>
@@ -127,7 +132,7 @@ export function ConceptGraphView({ conceptId }: { conceptId: string }) {
                   <path d="M0,0 L10,5 L0,10 z" className="fill-slate-400" />
                 </marker>
               </defs>
-              {data.edges.map((e) => {
+              {(Array.isArray(data.edges) ? data.edges : []).map((e) => {
                 const s = byId.get(e.source);
                 const t = byId.get(e.target);
                 if (!s || !t) return null;

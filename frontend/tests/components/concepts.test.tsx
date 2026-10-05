@@ -137,11 +137,24 @@ describe("ConceptDetailView", () => {
           ]),
         );
       }
+      if (url.includes("/graph")) {
+        return jsonResponse(200, {
+          data: {
+            nodes: [
+              { id: "c1", name: "Derivatives", mastery: 0.45, is_target: true },
+              { id: "c0", name: "Limits", mastery: 0.9, is_target: false },
+            ],
+            edges: [{ source: "c0", target: "c1", type: "prerequisite" }],
+          },
+          meta,
+        });
+      }
       return jsonResponse(200, { data: detail, meta });
     });
     renderWithQuery(<ConceptDetailView id="c1" />);
 
     expect(await screen.findByRole("heading", { name: "Derivatives" })).toBeInTheDocument();
+    expect(await screen.findAllByTestId("graph-node")).toHaveLength(2); // concept map rendered
     expect(screen.getByText("Difficulty: Hard")).toBeInTheDocument();
     expect(screen.getByText("Mastery 45% · intermediate")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Limits" })).toHaveAttribute("href", "/concepts/c0");

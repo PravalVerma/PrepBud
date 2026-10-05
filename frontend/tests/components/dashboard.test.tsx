@@ -385,3 +385,10 @@ describe("Notifications wiring", () => {
     ]);
   });
 });
+
+describe("Concept graph robustness", () => {
+  it("lays out a malformed payload as an empty graph instead of throwing", () => {
+    const { nodes } = layoutGraph({} as ConceptGraph, "t");
+    expect(nodes).toEqual([]);
+  });
+});
