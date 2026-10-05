@@ -33,14 +33,22 @@ describe("Sidebar", () => {
     expect(profile).not.toHaveAttribute("aria-current");
   });
 
-  it("shows later-phase pages as disabled, not links", () => {
-    render(<Sidebar />);
+  it("shows later-phase pages as disabled, not links", async () => {
+    const nav = await import("@/components/layout/nav-items");
+    nav.NAV_ITEMS.push({ href: "/someday", label: "Someday", icon: "?", comingInPhase: 9 });
+    try {
+      render(<Sidebar />);
+      expect(screen.queryByRole("link", { name: /someday/i })).toBeNull();
+      expect(screen.getByText("Someday").closest("[aria-disabled]")).toHaveAttribute("aria-disabled", "true");
+    } finally {
+      nav.NAV_ITEMS.pop();
+    }
+  });
 
-    expect(screen.queryByRole("link", { name: /goals/i })).toBeNull();
-    expect(screen.getByText("Goals").closest("[aria-disabled]")).toHaveAttribute(
-      "aria-disabled",
-      "true",
-    );
+  it("links to the Phase 6 goal and review pages", () => {
+    render(<Sidebar />);
+    expect(screen.getByRole("link", { name: /goals/i })).toHaveAttribute("href", "/goals");
+    expect(screen.getByRole("link", { name: /review/i })).toHaveAttribute("href", "/review");
   });
 
   it("links to the Phase 3 content pages", () => {

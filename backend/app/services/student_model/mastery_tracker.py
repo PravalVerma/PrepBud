@@ -8,9 +8,14 @@
     - the result is monotonic: a correct answer never lowers mastery and an incorrect one
       never raises it (the raw formula can raise mastery after a wrong answer when mastery
       is very low).
-* `apply_mastery_decay` — Ebbinghaus forgetting curve (§5.2). It is applied on *read*,
-  from ``last_assessed_at``, so it never compounds; an update starts from the decayed
-  value and resets the clock.
+* `apply_mastery_decay` — Ebbinghaus forgetting curve (§5.2). It is applied on *read*
+  from the decay anchor, so it never compounds; an update starts from the decayed value
+  and resets the clock. The daily maintenance job also *materialises* decay into
+  ``mastery_level`` (so SQL reads — concept lists, filters, dashboards — see it) and
+  records the moment in a ``history`` entry ``{"event": "decay", "at": …}``, which
+  becomes the new anchor. Exponential decay composes exactly
+  (decay(decay(m, t1), t2) == decay(m, t1 + t2)), so materialising changes nothing for
+  on-read values.
 * `MasteryTracker` — reads snapshots (Redis cache ``mastery:{user}:{concept}``, 30 min)
   and records attempts with row locks. One row per (user, concept).
 """
@@ -86,6 +91,42 @@ def apply_mastery_decay(mastery: float, days_since_review: float, ease_factor: f
     return _clamp(mastery * math.exp(-days_since_review / stability))
 
 
+DECAY_EVENT = "decay"
+
+
+def _parse_ts(value: Any) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+def decay_anchor(last_assessed_at: datetime | None, history: list[Any] | None) -> datetime | None:
+    """When decay last started counting: the last assessment or the last materialisation."""
+    anchor = last_assessed_at
+    for entry in reversed(history or []):
+        if isinstance(entry, dict) and entry.get("event") == DECAY_EVENT:
+            at = _parse_ts(entry.get("at"))
+            if at is not None and (anchor is None or at > anchor):
+                anchor = at
+            break
+    return anchor
+
+
+def assessed_level(history: list[Any] | None, default: float) -> float:
+    """Mastery as of the last assessment (before any decay)."""
+    for entry in reversed(history or []):
+        if isinstance(entry, dict) and entry.get("event") != DECAY_EVENT:
+            try:
+                return float(entry.get("mastery", default))
+            except (TypeError, ValueError):
+                return default
+    return default
+
+
 def confidence_for(attempts: int) -> float:
     """Confidence in the estimate grows with evidence: 0 → 0, 3 → 0.5, 9 → 0.75."""
     return round(attempts / (attempts + 3), 4) if attempts > 0 else 0.0
@@ -108,11 +149,14 @@ class MasterySnapshot:
     repetition_count: int = 0
     last_assessed_at: datetime | None = None
     next_review_at: datetime | None = None
+    # Decay anchor (last assessment or last materialisation) and the level then assessed.
+    decay_anchor: datetime | None = None
+    assessed_level: float = 0.0
 
     def to_cache(self) -> str:
         data = asdict(self)
         data["concept_id"] = str(self.concept_id)
-        for key in ("last_assessed_at", "next_review_at"):
+        for key in _TIMESTAMP_FIELDS:
             value = data[key]
             data[key] = value.isoformat() if value else None
         return json.dumps(data)
@@ -120,11 +164,18 @@ class MasterySnapshot:
     @classmethod
     def from_cache(cls, raw: str) -> MasterySnapshot:
         data: dict[str, Any] = json.loads(raw)
+        data = {k: v for k, v in data.items() if k in _SNAPSHOT_FIELDS}  # tolerate old entries
         data["concept_id"] = uuid.UUID(data["concept_id"])
-        for key in ("last_assessed_at", "next_review_at"):
+        for key in _TIMESTAMP_FIELDS:
             if data.get(key):
                 data[key] = datetime.fromisoformat(data[key])
+        if "decay_anchor" not in data:
+            data["decay_anchor"] = data.get("last_assessed_at")
         return cls(**data)
+
+
+_TIMESTAMP_FIELDS = ("last_assessed_at", "next_review_at", "decay_anchor")
+_SNAPSHOT_FIELDS = frozenset(MasterySnapshot.__dataclass_fields__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -167,9 +218,10 @@ class MasteryTracker:
     def _snapshot(self, row: StudentConceptMastery) -> MasterySnapshot:
         stored = float(row.mastery_level or 0.0)
         ease = float(row.ease_factor or self.settings.sm2_initial_ease_factor)
+        anchor = decay_anchor(row.last_assessed_at, row.history)
         return MasterySnapshot(
             concept_id=row.concept_id,
-            level=round(self._effective(stored, row.last_assessed_at, ease), 4),
+            level=round(self._effective(stored, anchor, ease), 4),
             stored_level=stored,
             confidence=float(row.confidence or 0.0),
             attempt_count=int(row.attempt_count or 0),
@@ -180,6 +232,8 @@ class MasteryTracker:
             repetition_count=int(row.repetition_count or 0),
             last_assessed_at=row.last_assessed_at,
             next_review_at=row.next_review_at,
+            decay_anchor=anchor,
+            assessed_level=assessed_level(row.history, stored),
         )
 
     def _empty(self, concept_id: uuid.UUID) -> MasterySnapshot:
@@ -206,7 +260,7 @@ class MasteryTracker:
                 snap = MasterySnapshot.from_cache(value)
                 # Recompute decay against "now" — cached values are raw.
                 snap.level = round(
-                    self._effective(snap.stored_level, snap.last_assessed_at, snap.ease_factor), 4
+                    self._effective(snap.stored_level, snap.decay_anchor, snap.ease_factor), 4
                 )
                 found[concept_id] = snap
         return found
@@ -290,7 +344,8 @@ class MasteryTracker:
         cfg = self.settings
         row = await self._locked_row(user_id, concept_id)
         ease = float(row.ease_factor or cfg.sm2_initial_ease_factor)
-        old = self._effective(float(row.mastery_level or 0.0), row.last_assessed_at, ease)
+        anchor = decay_anchor(row.last_assessed_at, row.history)
+        old = self._effective(float(row.mastery_level or 0.0), anchor, ease)
         new = update_mastery(
             MasteryUpdateInput(
                 current_mastery=old,
@@ -347,3 +402,41 @@ class MasteryTracker:
         await self.session.flush()
         await self._cache_set(user_id, [self._snapshot(row)])
         return schedule
+
+    def materialise_decay(self, row: StudentConceptMastery) -> bool:
+        """Write decayed mastery into ``mastery_level`` (caller flushes/commits).
+
+        Returns False when nothing changed. Re-running is harmless (exponential decay
+        composes). History stays readable: the trailing decay entry is updated in place
+        until mastery has dropped ``decay_history_step`` below where that entry started
+        (its ``from``); then a new entry begins — one chart point per step of forgetting.
+        """
+        cfg = self.settings
+        if not cfg.decay_enabled or row.last_assessed_at is None:
+            return False
+        stored = float(row.mastery_level or 0.0)
+        ease = float(row.ease_factor or cfg.sm2_initial_ease_factor)
+        anchor = decay_anchor(row.last_assessed_at, row.history)
+        effective = self._effective(stored, anchor, ease)
+        if stored - effective < 0.0005:
+            return False
+        now = self.now()
+        entry = {
+            "date": now.date().isoformat(),
+            "at": now.isoformat(),
+            "mastery": round(effective, 4),
+            "event": DECAY_EVENT,
+        }
+        history = list(row.history or [])
+        last = history[-1] if history else None
+        if isinstance(last, dict) and last.get("event") == DECAY_EVENT and not last.get("closed"):
+            start = float(last.get("from") or last.get("mastery") or effective)
+            history[-1] = {**entry, "from": start}
+        else:
+            start = round(stored, 4)
+            history.append({**entry, "from": start})
+        if start - effective >= cfg.decay_history_step:
+            history[-1]["closed"] = True  # the next decay starts a new point
+        row.history = history[-cfg.mastery_history_limit :]
+        row.mastery_level = round(effective, 6)
+        return True

@@ -42,6 +42,15 @@ import type {
   SessionView,
   WsTicket,
 } from "@/types/session";
+import type {
+  Goal,
+  GoalCreate,
+  GoalStatus,
+  GoalUpdate,
+  ReviewItem,
+  ReviewItemUpdate,
+  StudyPlan,
+} from "@/types/study";
 
 export const API_BASE = "/api/backend";
 
@@ -198,4 +207,16 @@ export const api = {
   resumeSession: (id: string) => data<SessionView>("POST", `/sessions/${id}/resume`),
   /** Single-use, short-lived ticket for opening the session WebSocket. */
   getWsTicket: (id: string) => data<WsTicket>("POST", `/sessions/${id}/ws-ticket`),
+
+  // Learning goals (API_CONTRACT §3.7) and the study plan (§3.10)
+  listGoals: (params?: PageParams & { status?: GoalStatus }) =>
+    request<PaginatedEnvelope<Goal>>("GET", `/goals${query(params)}`),
+  getGoal: (id: string) => data<Goal>("GET", `/goals/${id}`),
+  createGoal: (body: GoalCreate) => data<Goal>("POST", "/goals", body),
+  updateGoal: (id: string, body: GoalUpdate) => data<Goal>("PATCH", `/goals/${id}`, body),
+  deleteGoal: (id: string) => request<void>("DELETE", `/goals/${id}`),
+  getStudyPlan: () => data<StudyPlan>("GET", "/study-plan"),
+  regenerateStudyPlan: () => data<StudyPlan>("POST", "/study-plan/regenerate"),
+  updateReviewItem: (id: string, body: ReviewItemUpdate) =>
+    data<ReviewItem>("PATCH", `/study-plan/items/${id}`, body),
 };

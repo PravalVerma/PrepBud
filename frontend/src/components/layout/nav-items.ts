@@ -11,7 +11,7 @@ export const NAV_ITEMS: NavItem[] = [
   { href: "/upload", label: "Upload material", icon: "⇪" },
   { href: "/concepts", label: "Concepts", icon: "◈" },
   { href: "/session", label: "Study session", icon: "▶" },
-  { href: "/goals", label: "Goals", icon: "◎", comingInPhase: 6 },
-  { href: "/review", label: "Review", icon: "↻", comingInPhase: 6 },
+  { href: "/goals", label: "Goals", icon: "◎" },
+  { href: "/review", label: "Review", icon: "↻" },
   { href: "/profile", label: "Profile", icon: "◉" },
 ];

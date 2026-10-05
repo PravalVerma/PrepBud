@@ -8,33 +8,9 @@
  * question generator and evaluator are the OpenAI-compatible mock LLM, whose MCQ
  * questions always have option A correct.
  */
-import { expect, type Locator, type Page, test } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 
-import { signUp, uploadCalculus } from "./support/journey";
-
-/** Waits for the current turn, acknowledging explanations until a question is open. */
-async function openQuestion(page: Page): Promise<Locator> {
-  const room = page.getByTestId("session-room");
-  const active = page
-    .getByTestId("question-card")
-    .filter({ has: page.getByRole("button", { name: "Submit answer" }) });
-  for (let i = 0; i < 6; i++) {
-    await expect(room).toHaveAttribute("data-busy", "false", { timeout: 30_000 });
-    await expect(room).toHaveAttribute("data-awaiting", /^(acknowledgement|answer)$/, { timeout: 30_000 });
-    if ((await room.getAttribute("data-awaiting")) === "answer") return active;
-    await page.getByRole("button", { name: "Got it" }).click();
-  }
-  throw new Error("no question was asked");
-}
-
-async function answer(page: Page, option: number): Promise<Locator> {
-  const card = await openQuestion(page);
-  await card.getByTestId("answer-option").nth(option).click();
-  await card.getByRole("button", { name: "Submit answer" }).click();
-  const evaluation = page.getByTestId("evaluation").last();
-  await expect(page.getByTestId("session-room")).toHaveAttribute("data-busy", "false", { timeout: 30_000 });
-  return evaluation;
-}
+import { answer, signUp, uploadCalculus } from "./support/journey";
 
 test("study session: explanation, questions, evaluation, summary, history", async ({ page }) => {
   test.setTimeout(240_000);

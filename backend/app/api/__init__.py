@@ -2,7 +2,17 @@
 
 from fastapi import APIRouter, Depends
 
-from app.api import auth, concepts, documents, health, profile, sessions, subjects
+from app.api import (
+    auth,
+    concepts,
+    documents,
+    goals,
+    health,
+    profile,
+    sessions,
+    study_plan,
+    subjects,
+)
 from app.api.deps import rate_limit_api
 
 api_router = APIRouter()
@@ -17,6 +27,8 @@ _protected.include_router(documents.router)
 _protected.include_router(concepts.router)
 _protected.include_router(concepts.search_router)
 _protected.include_router(sessions.router)
+_protected.include_router(goals.router)
+_protected.include_router(study_plan.router)
 api_router.include_router(_protected)
 # The session WebSocket authenticates with a single-use ticket, not a bearer token.
 api_router.include_router(sessions.ws_router)

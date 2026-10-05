@@ -10,6 +10,7 @@ import { Card, CardHeader } from "@/components/ui/card";
 import { Alert } from "@/components/ui/feedback";
 import { SelectField } from "@/components/ui/field";
 import { useCreateSession } from "@/hooks/use-sessions";
+import { useGoals } from "@/hooks/use-study-plan";
 import { ApiError, api } from "@/lib/api";
 import type { SessionType } from "@/types/session";
 
@@ -22,8 +23,13 @@ const TYPES: { value: SessionType; label: string; hint: string }[] = [
 
 const BUDGETS = [10, 20, 30, 45, 60].map((m) => ({ value: String(m), label: `${m} minutes` }));
 
-/** `conceptId` (from "Study this concept") focuses the session on one concept. */
-export function StartSessionForm({ conceptId }: { conceptId?: string }) {
+/**
+ * `conceptId` (from "Study this concept") focuses the session on one concept; `goalId`
+ * (from a goal's "Study now") preselects the goal whose concepts the tutor works on.
+ */
+export function StartSessionForm({ conceptId, goalId }: { conceptId?: string; goalId?: string }) {
+  const goals = useGoals({ per_page: 50, status: "active" });
+  const [goal, setGoal] = useState(goalId ?? "");
   const concept = useQuery({
     queryKey: ["concepts", "detail", conceptId],
     queryFn: () => api.getConcept(conceptId!),
@@ -42,6 +48,7 @@ export function StartSessionForm({ conceptId }: { conceptId?: string }) {
         session_type: type,
         time_budget_minutes: Number(budget),
         ...(conceptId ? { concept_ids: [conceptId] } : {}),
+        ...(goal && !conceptId ? { learning_goal_id: goal } : {}),
       },
       { onSuccess: (created) => router.push(`/session/${created.session_id}`) },
     );
@@ -75,6 +82,18 @@ export function StartSessionForm({ conceptId }: { conceptId?: string }) {
           options={BUDGETS}
           hint="The session wraps up when time is up."
         />
+        {!conceptId && (goals.data?.data.length ?? 0) > 0 && (
+          <SelectField
+            label="Goal"
+            value={goal}
+            onChange={(e) => setGoal(e.target.value)}
+            options={[
+              { value: "", label: "No particular goal" },
+              ...(goals.data?.data ?? []).map((g) => ({ value: g.id, label: g.title })),
+            ]}
+            hint="Concepts from this goal come first."
+          />
+        )}
         <div className="sm:col-span-2">
           {error && (
             <div className="mb-3">

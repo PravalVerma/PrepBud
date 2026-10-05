@@ -163,6 +163,12 @@ class LearningEngineSettings(BaseModel):
     mastery_history_limit: int = 50
     # Stored questions within this difficulty distance of the target are reused (assumption #9).
     question_reuse_window: float = 0.15
+    # Study plans (LEARNING_ENGINE §8): reviews are planned this many days ahead.
+    study_plan_horizon_days: int = 14
+    # Daily maintenance (decay + plan refresh) runs at this hour (UTC) via Celery Beat.
+    daily_maintenance_hour_utc: int = 3
+    # Materialised decay adds a mastery-history point per this much forgetting.
+    decay_history_step: float = 0.05
 
 
 class Settings(BaseSettings):

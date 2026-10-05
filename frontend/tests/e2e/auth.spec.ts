@@ -27,7 +27,7 @@ test("auth cookies are httpOnly and SameSite=Strict", async ({ page, context }) 
   await page.getByLabel("Email").fill(email);
   await page.getByLabel("Password").fill(password);
   await page.getByRole("button", { name: "Create account" }).click();
-  await expect(page).toHaveURL(/\/dashboard$/);
+  await expect(page).toHaveURL(/\/dashboard$/, { timeout: 30_000 });
 
   const authCookies = (await context.cookies()).filter((c) => c.name.startsWith("sb-"));
   expect(authCookies.length).toBeGreaterThan(0);

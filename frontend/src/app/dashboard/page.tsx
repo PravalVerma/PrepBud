@@ -4,6 +4,7 @@ import { PlaceholderCard } from "@/components/dashboard/placeholder-card";
 import { RecentSessionsCard } from "@/components/dashboard/recent-sessions-card";
 import { SubjectsCard } from "@/components/dashboard/subjects-card";
 import { WelcomeBanner } from "@/components/dashboard/welcome-banner";
+import { ReviewQueue } from "@/components/review/review-queue";
 
 export const metadata: Metadata = { title: "Dashboard" };
 
@@ -17,7 +18,7 @@ export default function DashboardPage() {
           description="Your progress across every concept."
           phase={7}
         />
-        <PlaceholderCard title="Due for review" description="Spaced-repetition items for today." phase={6} />
+        <ReviewQueue compact />
         <RecentSessionsCard />
       </div>
       <SubjectsCard />

@@ -2,7 +2,7 @@
 # (On Windows without make, run the commands shown in each recipe directly.)
 
 .DEFAULT_GOAL := help
-.PHONY: help up down install migrate dev-backend dev-worker dev-frontend test test-backend \
+.PHONY: help up down install migrate dev-backend dev-worker dev-beat dev-frontend test test-backend \
         test-frontend test-e2e lint typecheck format check
 
 # Override per machine, e.g. `make dev-backend BACKEND_PORT=8001`.
@@ -35,6 +35,9 @@ dev-backend: ## Run the API with auto-reload (http://localhost:$(BACKEND_PORT)/d
 
 dev-worker: ## Run the Celery worker (document processing)
 	cd backend && uv run celery -A app.workers.celery_app worker -l info $(WORKER_FLAGS)
+
+dev-beat: ## Run Celery Beat (daily mastery decay + study plan refresh)
+	cd backend && uv run celery -A app.workers.celery_app beat -l info
 
 dev-frontend: ## Run the Next.js dev server (http://localhost:3000)
 	cd frontend && npm run dev

@@ -1,13 +1,22 @@
 "use client";
 
-import { useQueryClient } from "@tanstack/react-query";
+import { type QueryClient, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef } from "react";
 
 import { sessionListKey } from "@/hooks/use-sessions";
+import { goalsKey, studyPlanKey } from "@/hooks/use-study-plan";
 import { api } from "@/lib/api";
 import { SessionSocket } from "@/lib/session-socket";
 import { useSessionStore } from "@/stores/session-store";
 import type { ClientMessage, SessionQuestion } from "@/types/session";
+
+/** A finished session updates history, the study plan (items ticked off, reviews
+ * scheduled) and goal progress. */
+function invalidateAfterSession(queryClient: QueryClient) {
+  for (const queryKey of [sessionListKey, studyPlanKey, goalsKey]) {
+    void queryClient.invalidateQueries({ queryKey });
+  }
+}
 
 /**
  * Opens the live channel for a session and exposes the student's actions. Events flow
@@ -29,7 +38,7 @@ export function useSessionChannel(sessionId: string, wsBaseUrl: string) {
       onEvent: (event) => {
         if (event.type === "question") questionShownAt.current = Date.now();
         receive(event);
-        if (event.type === "session_ended") void queryClient.invalidateQueries({ queryKey: sessionListKey });
+        if (event.type === "session_ended") invalidateAfterSession(queryClient);
       },
       onStatus: setConnection,
     });
@@ -101,7 +110,7 @@ export function useSessionChannel(sessionId: string, wsBaseUrl: string) {
       const view = await api.endSession(sessionId);
       for (const event of view.events ?? []) store.getState().receive(event);
       store.getState().view(view);
-      void queryClient.invalidateQueries({ queryKey: sessionListKey });
+      invalidateAfterSession(queryClient);
     } catch (error) {
       store.getState().receive({
         type: "error",

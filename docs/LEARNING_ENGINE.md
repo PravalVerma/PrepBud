@@ -415,6 +415,13 @@ def check_frustration(state: SessionState) -> bool:
 - Switch to an easier concept.
 - If persistent, suggest ending the session with an encouraging message.
 
+#### Implementation notes (Phases 4 and 6)
+
+- **Decay on read.** Decay is computed whenever mastery is read, from the *decay anchor*: the later of `last_assessed_at` and the last materialisation. So session planning, goal progress and the study plan always see current values.
+- **Daily materialisation.** A Celery Beat job, `maintenance.daily` at `daily_maintenance_hour_utc`, writes the decayed value into `mastery_level`. This lets SQL reads (concept lists, filters, dashboards) see decay too. It records the moment as a `history` entry, `{"event": "decay", "at", "from", "mastery"}`, which becomes the new anchor.
+- **No compounding.** Exponential decay composes exactly: `decay(decay(m, t₁), t₂) = decay(m, t₁ + t₂)`. So materialising never changes what is read, and running the job twice is harmless.
+- **History stays readable.** The trailing decay entry is updated in place until mastery has dropped 0.05 (`decay_history_step`) below where that entry started. Then the next decay starts a new entry, giving one chart point per step of forgetting.
+
 ---
 
 ## 8. Study Plan Generation
@@ -487,6 +494,21 @@ def generate_study_plan(
         status='active',
     )
 ```
+
+#### Implementation notes (Phase 6)
+
+The plan generator is a pure function, `services/study_plan/plan_generator.py`. It differs from the sketch above in these ways:
+
+- **One plan, all goals.** One active plan per user covers all active goals. A concept in several goals gets one item, on the earlier date and with the higher priority.
+- **Concepts per day.** The number is `ceil(remaining / days_left)`, counting the target date itself, so a deadline is always met. The sketch's `len // days` could overrun the deadline.
+- **Reviews (step 7):**
+  - every practised concept whose SM-2 `next_review_at` falls within `study_plan_horizon_days` (default 14). An overdue review keeps its original date, so it shows as overdue and sorts first;
+  - every *forgotten* concept, one that had been learned (≥ `mastery_review_trigger`, 0.70, at its last assessment) but has decayed below it. It is reviewed today.
+  - Review priority is `0.5 + 0.1·days_overdue + 0.3·(1 − mastery)`, capped at 1.
+- **Learn and review together.** When a goal concept is also due for review, it gets one `learn` item on the earlier date.
+- **Done today.** A concept already completed or skipped today is planned for tomorrow at the earliest.
+- **Session completion.** Items due today or overdue are marked `completed` for the concepts the session covered. Review items additionally need an answered question. Then the plan is regenerated.
+- **Review sessions.** A `review` session takes the plan's due `review` items: overdue first, then by priority. Due `learn` items act as goal concepts for other session types when the session has no goal of its own. That is how the UI's "Study today's plan" works.
 
 ### 8.3 Plan Recalculation Triggers
 

@@ -140,19 +140,36 @@ describe("MasteryBar (AC-5.4)", () => {
 });
 
 describe("StartSessionForm", () => {
+  const goalsPage = (data: unknown[]) =>
+    jsonResponse(200, { data, meta: { ...meta, pagination: { total: data.length, page: 1, per_page: 50, total_pages: 1 } } });
+  const created = () =>
+    ok({ session_id: "s9", status: "initialising", websocket_url: "/x", objective: { target_concepts: [] } }, 201);
+  const sessionBody = () =>
+    JSON.parse(String(fetchMock.mock.calls.find(([u]) => u === "/api/backend/sessions")?.[1]?.body));
+
   it("creates a session and opens it", async () => {
-    fetchMock.mockResolvedValue(
-      ok({ session_id: "s9", status: "initialising", websocket_url: "/x", objective: { target_concepts: [] } }, 201),
-    );
+    fetchMock.mockImplementation(async (u) => (String(u).startsWith("/api/backend/goals") ? goalsPage([]) : created()));
     renderWithQuery(<StartSessionForm />);
     await userEvent.selectOptions(screen.getByLabelText("Session type"), "practice");
     await userEvent.selectOptions(screen.getByLabelText("Time budget"), "30");
     await userEvent.click(screen.getByRole("button", { name: "Start session" }));
 
     await waitFor(() => expect(push).toHaveBeenCalledWith("/session/s9"));
-    const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toBe("/api/backend/sessions");
-    expect(JSON.parse(String(init?.body))).toEqual({ session_type: "practice", time_budget_minutes: 30 });
+    expect(sessionBody()).toEqual({ session_type: "practice", time_budget_minutes: 30 });
+    expect(screen.queryByLabelText("Goal")).toBeNull(); // no active goals
+  });
+
+  it("can work towards a goal", async () => {
+    fetchMock.mockImplementation(async (u) =>
+      String(u).startsWith("/api/backend/goals")
+        ? goalsPage([{ id: "g1", title: "Calculus" }, { id: "g2", title: "Physics" }])
+        : created(),
+    );
+    renderWithQuery(<StartSessionForm goalId="g2" />);
+    expect(await screen.findByLabelText("Goal")).toHaveValue("g2");
+    await userEvent.click(screen.getByRole("button", { name: "Start session" }));
+    await waitFor(() => expect(push).toHaveBeenCalled());
+    expect(sessionBody()).toMatchObject({ learning_goal_id: "g2" });
   });
 
   it("focuses on one concept and explains when there is nothing to study", async () => {

@@ -31,6 +31,7 @@ from app.integrations.qdrant import SectionVectorStore
 from app.integrations.s3 import ObjectStorage
 from app.services.content.document_processor import TaskQueue
 from app.services.learning_engine.session_manager import SessionManager
+from app.services.study_plan.plan_service import StudyPlanService
 
 logger = get_logger(__name__)
 
@@ -249,3 +250,10 @@ def get_session_manager(request: Request) -> SessionManager:
 
 
 Sessions = Annotated[SessionManager, Depends(get_session_manager)]
+
+
+def get_plan_service(request: Request, session: DbSession) -> StudyPlanService:
+    return StudyPlanService(session, request.app.state.settings, redis=request.app.state.redis)
+
+
+Plans = Annotated[StudyPlanService, Depends(get_plan_service)]

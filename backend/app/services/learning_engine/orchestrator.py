@@ -77,6 +77,7 @@ from app.services.student_model.misconception_tracker import (
     DetectedMisconception,
     MisconceptionTracker,
 )
+from app.services.study_plan.plan_service import goal_concept_ids
 from app.services.tutor.context_builder import (
     ConceptBrief,
     TutorContext,
@@ -407,20 +408,19 @@ class SessionEngine:
                 )
             )
             if goal is not None:
-                if goal.target_concepts:
-                    goal_concepts = list(goal.target_concepts)
-                elif goal.subject_id:
-                    goal_concepts = [c.id for c in concepts if c.subject_id == goal.subject_id]
+                goal_concepts = await goal_concept_ids(session, user, goal)
 
         now = self.d.now()
         due: dict[uuid.UUID, ReviewCandidate] = {}
         plan_items = (
             await session.execute(
                 select(
+                    ReviewItem.id,
                     ReviewItem.concept_id,
                     ReviewItem.priority,
                     ReviewItem.scheduled_date,
                     ReviewItem.status,
+                    StudyPlan.generation_metadata,
                 )
                 .join(StudyPlan, StudyPlan.id == ReviewItem.study_plan_id)
                 .where(
@@ -429,12 +429,22 @@ class SessionEngine:
                     ReviewItem.status.in_(("pending", "overdue")),
                     ReviewItem.scheduled_date <= now.date(),
                 )
+                .order_by(ReviewItem.scheduled_date, ReviewItem.priority.desc())
             )
         ).all()
-        for concept_id, priority, scheduled, status in plan_items:
+        # Due plan items: reviews feed spaced repetition; concepts to *learn* today stand in
+        # for goal concepts when the session has no goal of its own (Phase 6).
+        plan_learn: list[uuid.UUID] = []
+        for item_id, concept_id, priority, scheduled, status, meta in plan_items:
+            kind = ((meta or {}).get("item_kinds") or {}).get(str(item_id), "review")
+            if kind == "learn":
+                plan_learn.append(concept_id)
+                continue
             due[concept_id] = ReviewCandidate(
                 concept_id, float(priority or 0.5), status == "overdue" or scheduled < now.date()
             )
+        if goal_concepts is None and plan_learn:
+            goal_concepts = list(dict.fromkeys(plan_learn))
         for snap in snapshots.values():  # SM-2 due dates on the mastery records themselves
             if snap.next_review_at and snap.next_review_at <= now and snap.concept_id not in due:
                 overdue = snap.next_review_at.date() < now.date()

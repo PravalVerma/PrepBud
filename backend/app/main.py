@@ -15,7 +15,7 @@ from app.core.exceptions import register_exception_handlers
 from app.core.logging import configure_logging, get_logger
 from app.core.middleware import register_middleware
 from app.core.security import JWTVerifier
-from app.db.base import create_engine, create_sessionmaker
+from app.db.base import create_engine, create_sessionmaker, warm_pool
 from app.integrations.qdrant import SectionVectorStore
 from app.integrations.redis import create_redis
 from app.integrations.s3 import ObjectStorage
@@ -31,6 +31,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     engine = create_engine(settings)
     app.state.engine = engine
     app.state.sessionmaker = create_sessionmaker(engine)
+    await warm_pool(engine, settings.database_pool_size)
     app.state.redis = create_redis(settings)
     app.state.jwt_verifier = JWTVerifier(settings)
     app.state.storage = ObjectStorage.from_settings(settings)

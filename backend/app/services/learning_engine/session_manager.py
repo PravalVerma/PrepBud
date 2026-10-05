@@ -57,6 +57,7 @@ from app.services.learning_engine.state import (
     StartSessionRequest,
     new_state,
 )
+from app.services.study_plan.plan_service import StudyPlanService
 
 logger = get_logger(__name__)
 
@@ -264,7 +265,8 @@ class SessionManager:
             "checkpoint_turn": state["turn"],
             "end_reason": state.get("end_reason"),
         }
-        if state["status"] == "completed" and row.ended_at is None:
+        just_completed = state["status"] == "completed" and row.ended_at is None
+        if just_completed:
             now = self.now()
             row.ended_at = now
             started = row.started_at or datetime.fromisoformat(state["started_at"])
@@ -280,6 +282,30 @@ class SessionManager:
                 logger.warning(
                     "session state cache write failed", extra={"error": type(exc).__name__}
                 )
+        if just_completed:
+            await self._update_study_plan(row.user_id, row.id, state)
+
+    async def _update_study_plan(
+        self, user_id: uuid.UUID, session_id: uuid.UUID, state: SessionState
+    ) -> None:
+        """Phase 6: tick off what the session covered and replan (LEARNING_ENGINE §8.3).
+
+        Best effort — a planning failure must never fail the student's session; the plan is
+        refreshed again on next read and by the daily job.
+        """
+        try:
+            async with self.sessionmaker() as db:
+                planner = StudyPlanService(db, self.settings, redis=self.redis, now=self.now)
+                await planner.on_session_completed(
+                    user_id,
+                    covered=[uuid.UUID(c) for c in state["concepts_covered"]],
+                    attempted=[uuid.UUID(a["concept_id"]) for a in state["attempts"]],
+                )
+                await db.commit()
+        except Exception:
+            logger.exception(
+                "study plan update after session failed", extra={"session_id": str(session_id)}
+            )
 
     def _result(
         self, row_id: uuid.UUID, state: SessionState, events: list[dict[str, Any]] | None = None

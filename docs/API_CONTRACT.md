@@ -464,9 +464,15 @@ Hybrid search over the user's document sections:
 
 ### 3.7 Learning Goals
 
+Every goal change regenerates the study plan (§3.10).
+
 #### `GET /goals`
 
-List user's goals.
+List the user's goals, newest first.
+
+**Query params:** `?status=active&page=1&per_page=20`
+
+`status` is one of `draft | active | completed | paused | abandoned`. Each goal includes `progress` (below).
 
 #### `POST /goals`
 
@@ -485,15 +491,66 @@ Create a learning goal.
 }
 ```
 
-**Response 201:** Created goal with auto-generated study plan.
+Field rules:
+
+- Only `title` is required (1–200 characters).
+- `goal_type` is one of `mastery | deadline | exploration`. A `deadline` goal needs a `target_date`.
+
+**Concept scope** is the first of these that applies:
+
+1. `target_concept_ids`;
+2. the course's concepts, meaning concepts in its chapters or from documents uploaded to it;
+3. the subject's concepts;
+4. every concept the student has.
+
+**Errors:** a subject, course or concept that doesn't exist or belongs to someone else returns `404`. For concepts, `details.concept_ids` lists the ones that failed.
+
+**Response 201:** the created goal, with its concepts and a summary of the auto-generated study plan:
+```json
+{
+  "data": {
+    "id": "uuid",
+    "title": "Master Quadratic Equations",
+    "description": "Complete understanding of Chapter 5",
+    "goal_type": "deadline",
+    "target_date": "2026-10-15",
+    "status": "active",
+    "subject_id": null,
+    "course_id": null,
+    "target_concept_ids": ["uuid1", "uuid2", "uuid3"],
+    "progress": {
+      "concept_count": 3,
+      "mastered_count": 0,
+      "average_mastery": 0.12,
+      "progress": 0.15,
+      "days_remaining": 10,
+      "all_mastered": false
+    },
+    "concepts": [{"id": "uuid1", "name": "Quadratic Formula", "mastery_level": 0.2}],
+    "study_plan": {"id": "uuid", "total_items": 3, "due_today": 1, "generated_at": "..."},
+    "created_at": "...",
+    "updated_at": "..."
+  }
+}
+```
+
+The progress fields are computed as follows:
+
+- `progress` is the mean over the goal's concepts of `min(mastery / 0.80, 1)`, using decay-adjusted mastery.
+- `mastered_count` counts concepts at or above the learned threshold (0.80).
+- `all_mastered` is reported, but the goal's status is never changed automatically.
+
+#### `GET /goals/{goal_id}`
+
+The goal, with `progress` and `concepts`.
 
 #### `PATCH /goals/{goal_id}`
 
-Update a goal.
+Update any of the create fields, or `status`. Pausing, completing or abandoning a goal removes its concepts from the study plan. The response matches the create response.
 
 #### `DELETE /goals/{goal_id}`
 
-Delete a goal.
+Delete the goal (`204`). The plan is regenerated without it.
 
 ---
 
@@ -834,9 +891,21 @@ The learning engine (`app/services/learning_engine/`) implements this protocol. 
 
 ### 3.10 Study Plans
 
+Each user has one **active** plan. It covers all of their active goals plus spaced-repetition reviews.
+
+Regenerating the plan supersedes the old one and writes a new one, so plans form a history. Today's completed and skipped items carry over to the new plan.
+
+**When the plan is regenerated:**
+
+- a goal is created, changed or deleted;
+- a session is completed;
+- a document finishes processing (only if the user has an active goal);
+- the daily maintenance job runs;
+- `GET /study-plan` finds the plan was made on an earlier day.
+
 #### `GET /study-plan`
 
-Get the user's active study plan.
+Get the user's active study plan. It is generated on first use.
 
 **Response 200:**
 ```json
@@ -846,6 +915,7 @@ Get the user's active study plan.
     "learning_goal_id": "uuid",
     "status": "active",
     "generated_at": "2026-09-17T10:00:00Z",
+    "valid_until": "2026-10-01T10:00:00Z",
     "items": [
       {
         "id": "uuid",
@@ -854,26 +924,63 @@ Get the user's active study plan.
         "scheduled_date": "2026-09-18",
         "priority": 0.9,
         "status": "pending",
-        "mastery_level": 0.45
+        "kind": "learn",
+        "goal_id": "uuid",
+        "mastery_level": 0.45,
+        "mastery_label": "intermediate",
+        "next_review_at": null,
+        "completed_at": null
       }
     ],
     "stats": {
       "total_items": 15,
       "completed": 3,
+      "skipped": 0,
       "overdue": 1,
-      "upcoming_today": 2
+      "upcoming_today": 2,
+      "due_today": 3,
+      "reviews_due": 1,
+      "next_due_date": "2026-09-19",
+      "estimated_minutes": 240
     }
   }
 }
 ```
 
+Plan-level fields:
+
+- `learning_goal_id` is set only when exactly one goal is active.
+
+Item fields:
+
+- `kind` is `learn` (a goal concept) or `review` (spaced repetition, or a concept that has been forgotten).
+- `status` is one of `pending | overdue | completed | skipped`.
+- `mastery_level` is decay-adjusted.
+
+Item ordering:
+
+1. **Overdue items first**, oldest first.
+2. Then by date and priority.
+3. Completed and skipped items last.
+
+Stats:
+
+- `due_today` = `overdue` + `upcoming_today`.
+
 #### `POST /study-plan/regenerate`
 
-Force regeneration of the study plan.
+Force regeneration of the study plan. Returns the new plan.
 
 #### `PATCH /study-plan/items/{item_id}`
 
-Update a review item (e.g., mark as skipped, reschedule).
+Update an item of the active plan.
+
+**Body:** `{"status": "skipped" | "completed" | "pending", "scheduled_date": "YYYY-MM-DD"}`. At least one field is required.
+
+- `pending` un-skips an item.
+- `scheduled_date` reschedules the item. It must be today or later; an earlier date returns `400`.
+
+Returns the updated item. An item of a superseded plan, or of another user, returns `404`.
 
 ---
 

@@ -50,6 +50,7 @@ from app.db.models import (
     Document,
     DocumentSection,
     DocumentSectionConcept,
+    LearningGoal,
     Subject,
 )
 from app.db.repositories.concept import ConceptRepository
@@ -77,6 +78,7 @@ from app.services.content.text_extractor import (
     OCREngine,
     extract_text,
 )
+from app.services.study_plan.plan_service import StudyPlanService
 
 logger = get_logger(__name__)
 
@@ -336,6 +338,7 @@ class DocumentProcessor:
         await self._stage(ctx, "indexing", 0.9)
         embedding_status = await self._index(ctx, ai)
         await self._finalize(ctx, stats | {"embedding_status": embedding_status})
+        await self._refresh_study_plan(ctx)
         logger.info(
             "document ready",
             extra={"document_id": str(ctx.document_id), "chunks": len(chunks), **stats},
@@ -549,6 +552,27 @@ class DocumentProcessor:
             }
             doc.processing_metadata = meta | stats | {"stage": "complete", "progress": 1.0}
         await self._task_status(ctx.task_id, ctx.document_id, "ready", "complete", 1.0)
+
+    async def _refresh_study_plan(self, ctx: _Context) -> None:
+        """New concepts can belong to an active goal: replan (LEARNING_ENGINE §8.3). Best
+        effort — the document is ready either way."""
+        try:
+            async with self.sessionmaker() as session:
+                has_goal = await session.scalar(
+                    select(LearningGoal.id)
+                    .where(LearningGoal.user_id == ctx.user_id, LearningGoal.status == "active")
+                    .limit(1)
+                )
+                if has_goal is None:
+                    return
+                planner = StudyPlanService(session, self.settings, redis=self.redis)
+                await planner.regenerate(ctx.user_id, reason="document_processed")
+                await session.commit()
+        except Exception:
+            logger.exception(
+                "study plan refresh after processing failed",
+                extra={"document_id": str(ctx.document_id)},
+            )
 
     # --- failure / progress helpers ------------------------------------------------------------
 

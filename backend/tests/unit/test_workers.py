@@ -37,10 +37,16 @@ def test_reliability_settings() -> None:
 
 def test_tasks_registered_on_module_app() -> None:
     import app.workers.document_tasks
-    import app.workers.embedding_tasks  # noqa: F401
+    import app.workers.embedding_tasks
+    import app.workers.maintenance_tasks  # noqa: F401
 
     assert {PROCESS_DOCUMENT, REINDEX_DOCUMENT} <= set(celery_app.tasks)
-    assert TASK_MODULES == ["app.workers.document_tasks", "app.workers.embedding_tasks"]
+    assert {"maintenance.daily", "maintenance.refresh_user"} <= set(celery_app.tasks)
+    assert TASK_MODULES == [
+        "app.workers.document_tasks",
+        "app.workers.embedding_tasks",
+        "app.workers.maintenance_tasks",
+    ]
 
 
 async def test_queue_sends_by_name_with_ids() -> None:

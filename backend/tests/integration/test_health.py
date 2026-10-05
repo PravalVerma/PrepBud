@@ -11,6 +11,9 @@ from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.api import health as health_module
+from app.db.base import create_engine, warm_pool
+from tests.integration.conftest import Infra
+from tests.support import build_settings
 
 
 @pytest.mark.parametrize("path", ["/health", "/api/v1/health"])
@@ -98,3 +101,34 @@ async def test_qdrant_check_when_configured(
 
     assert resp.json()["services"]["qdrant"] == expected
     assert resp.json()["status"] == ("healthy" if expected == "ok" else "degraded")
+
+
+async def test_pool_is_warmed_at_startup(infra: Infra) -> None:
+    """Startup opens the pooled connections so the first request burst doesn't pay for them."""
+    settings = build_settings(
+        database_url=infra.database_url,
+        redis_url=infra.redis_url,
+        app_env="development",
+        database_pool_size=2,
+    )
+    engine = create_engine(settings)
+    try:
+        assert await warm_pool(engine, settings.database_pool_size) == 2
+        assert engine.pool.checkedin() == 2  # type: ignore[attr-defined]
+        assert await warm_pool(engine, 0) == 0
+    finally:
+        await engine.dispose()
+    broken = create_engine(
+        build_settings(
+            database_url="postgresql+asyncpg://nobody:nothing@127.0.0.1:1/none",
+            redis_url=infra.redis_url,
+            app_env="development",
+        )
+    )
+    assert await warm_pool(broken, 2) == 0  # best effort: logged, not raised
+    await broken.dispose()
+    test_engine = create_engine(
+        build_settings(database_url=infra.database_url, redis_url=infra.redis_url)
+    )
+    assert await warm_pool(test_engine, 5) == 0  # NullPool in tests
+    await test_engine.dispose()

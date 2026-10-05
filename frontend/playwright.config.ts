@@ -66,9 +66,14 @@ const backendEnv = {
 export default defineConfig({
   testDir: "./tests/e2e",
   fullyParallel: false,
+  // Locally the whole stack shares one laptop; more than two browsers starves the API.
+  workers: process.env.CI ? undefined : 2,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
   reporter: process.env.CI ? [["github"], ["list"]] : "list",
+  // The full stack (3 browsers, Next, API, worker, Postgres/Redis/Qdrant/S3) shares one
+  // machine; 5 s assertions flake on a laptop under that load.
+  expect: { timeout: 15_000 },
   use: { baseURL, trace: "retain-on-failure" },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   webServer: process.env.E2E_BASE_URL

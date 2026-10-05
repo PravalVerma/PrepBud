@@ -11,8 +11,9 @@ single source of truth. Read this file first, then the doc sections relevant to 
 | 2 Foundation & data layer | ✅ committed (`53602a2`) |
 | 3 Content pipeline | ✅ committed (`5f35580`) |
 | 4 Learning engine core | ✅ committed (`12e46c2`) |
-| 5 Interactive sessions | ✅ implemented, all AC-5.x verified (backend 866 / 95% cov, vitest 150, E2E 8/8) — **awaiting user review/commit** |
-| 6–8 | not started — **ask the user before starting each new phase** |
+| 5 Interactive sessions | ✅ complete — commit message provided (user commits; check `git log`) |
+| 6 Study plans & review | ✅ implemented, all AC-6.x verified (vitest 161, E2E 9/9) — **awaiting user review/commit** |
+| 7–8 | not started — **ask the user before starting each new phase** |
 
 Each phase's deliverables + acceptance criteria (AC-x.y) live in `docs/DEVELOPMENT_PHASES.md`.
 At the end of a phase: report AC status, update this table, stop. Never commit/push unless asked
@@ -44,6 +45,8 @@ backend/   FastAPI app (uv, Python 3.12)
   app/workers/             Celery app + tasks                                          [Phase 3]
   app/services/student_model, assessment, tutor, learning_engine                        [Phase 4]
   app/api/sessions.py      REST + SSE + WebSocket; learning_engine/tickets.py (WS tickets) [Phase 5]
+  app/api/goals.py, study_plan.py; services/study_plan/ (plan_generator = pure, plan_service =
+          DB); workers/maintenance_tasks.py (Celery Beat daily job)                    [Phase 6]
   app/integrations/        redis, s3, qdrant
   alembic/versions/        hand-written DDL (one statement per execute — asyncpg)
   tests/unit, tests/integration (testcontainers or TEST_DATABASE_URL/TEST_REDIS_URL), tests/ai
@@ -54,6 +57,7 @@ frontend/  Next.js 16 (App Router, React 19, Tailwind v4, TanStack Query 5, Zust
   src/app/upload, src/app/concepts(/[id]); src/lib/upload.ts (presigned PUT w/ progress)
   src/app/session(/[id]); components/session/*; lib/session-socket.ts (ticket + reconnect);
           stores/session-store.ts (pure event reducer); hooks/use-session-channel.ts
+  src/app/goals, src/app/review (study plan + review queue); hooks/use-study-plan.ts
   tests/ (vitest), tests/e2e (Playwright: mock Supabase Auth :54329, mock LLM :54330,
           API :8002, worker on Celery queue "e2e", web :3100)
 docs/      the spec — PRODUCT_REQUIREMENTS, ARCHITECTURE(+_DECISIONS), DOMAIN_MODEL, DATA_MODEL,
@@ -150,6 +154,31 @@ docs/      the spec — PRODUCT_REQUIREMENTS, ARCHITECTURE(+_DECISIONS), DOMAIN_
 - E2E mock LLM answers session prompts by `## Task:` heading (MCQ with option **A** correct, evaluation,
   misconception, plain-text summary) and streams tutor text word by word for `stream: true`.
 
+### Phase 6 decisions (study plans & review)
+
+- **One active study plan per user** covering all active goals + SM-2 reviews; regenerating supersedes
+  it (append-only history) and **carries over today's completed/skipped items** (their concepts move to
+  tomorrow). Serialised by `pg_advisory_xact_lock(hashtext('study_plan:'||user))`; deterministic per day.
+  Item `kind` (learn/review) and `goal_id` live in `study_plans.generation_metadata.item_kinds/item_goals`
+  (no schema change). `learning_goal_id` set only when exactly one goal is active.
+- Triggers: goal create/update/delete (inline, response includes `study_plan` brief), session completion
+  (`SessionManager._update_study_plan`, inline + best effort — not Celery, so the UI is immediately
+  consistent), document processed (only with an active goal), daily Beat job, and lazily on
+  `GET /study-plan` when `generated_for` < today. Deviation from ARCHITECTURE's "Celery" for
+  recalculation: it is cheap DB work; Celery runs the daily batch.
+- Generator (`plan_generator.py`): topological order (easier first on ties), `ceil(n / days_incl_target)`
+  per day (doc's floor overran deadlines), reviews within `study_plan_horizon_days` (overdue keep their
+  date → sort first, AC-6.2), "forgotten" = assessed ≥ 0.70 but now < 0.70 → review today.
+  `review` sessions use due *review* items; due *learn* items become goal concepts for other sessions
+  without a goal ("Study today's plan").
+- **Decay** (AC-6.5): still applied on read, now from a *decay anchor* (last assessment or last
+  materialisation). The daily job (`maintenance.daily` → `maintenance.refresh_user` per learner) writes
+  decayed mastery into `mastery_level` (so SQL reads/concept pages show it) + a history entry
+  `{event:"decay", at, from, mastery}` that becomes the anchor — exponential decay composes, so no
+  compounding; history gets one point per 0.05 drop (`closed` entries). Run Beat: `make dev-beat`.
+- Goal scope: explicit concepts → course (chapters or documents in the course) → subject → everything.
+  Progress = mean(min(mastery/0.8, 1)); `all_mastered` reported, status never auto-changed.
+
 ## Local environment (this machine)
 
 - Another project's containers own ports 5432 / 6379 / 8000 — **never stop them**. PrepBud's root
@@ -208,5 +237,11 @@ frontend: npm run dev · npm test · npm run lint · npm run typecheck · npm ru
 - Python on this machine defaults to cp1252 for file I/O: ad-hoc patch scripts must use
   `encoding="utf-8"` (or `PYTHONUTF8=1`). Bash heredocs containing quotes/backticks break —
   write scripts with the Write tool.
+- asyncpg's SCRAM-SHA-256 login hashes in Python **on the event loop** (0.5–2 s per new connection on
+  this laptop): a cold pool + request burst stalls the whole API. `warm_pool()` opens
+  `DATABASE_POOL_SIZE` connections at startup. Locally Playwright runs **2 workers** (3 starved the
+  API → flaky `toHaveURL`), global `expect` timeout 15 s.
+- Debugging E2E servers: Playwright drops webServer stdout unless `stdout: "pipe"`; trace.zip
+  `*.network` files hold request timings. In bash, `cd x && ( loop ) &` backgrounds the `cd` too.
 - Keyword retrieval uses an any-term tsquery (ANDs→ORs unless the query has `-exclusion`); the
   concept list `search` filter stays strict AND.

@@ -48,7 +48,8 @@ make up          # docker compose up -d --wait   (PostgreSQL, Redis, Qdrant, S3)
 make install     # uv sync + npm install
 make migrate     # alembic upgrade head
 make dev-backend # http://localhost:8000/docs  (health: /health); BACKEND_PORT=8001 to change
-make dev-worker  # Celery worker that processes uploaded documents
+make dev-worker  # Celery worker: document processing + scheduled maintenance
+make dev-beat    # Celery Beat: daily mastery decay + study plan refresh (optional locally)
 make dev-frontend# http://localhost:3000
 ```
 
