@@ -15,7 +15,7 @@ export function WelcomeBanner() {
   return (
     <section className="rounded-xl bg-gradient-to-r from-brand-600 to-brand-500 p-6 text-white shadow-sm">
       <h2 className="text-xl font-semibold">Welcome, {name}</h2>
-      <p className="mt-1 text-sm text-brand-100">
+      <p className="mt-1 text-sm text-white/85">
         Upload your study material and your tutor will build a personalised plan around it.
       </p>
       {needsProfile && (

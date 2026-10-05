@@ -22,10 +22,11 @@ export function useGoal(id: string | undefined) {
 }
 
 /** Goal changes regenerate the plan server-side, so both caches refresh. */
-function useGoalMutation<V>(fn: (vars: V) => Promise<unknown>) {
+function useGoalMutation<V>(fn: (vars: V) => Promise<unknown>, meta: { success?: string; errorToast?: boolean }) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: fn,
+    meta,
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: goalsKey });
       void queryClient.invalidateQueries({ queryKey: studyPlanKey });
@@ -33,10 +34,14 @@ function useGoalMutation<V>(fn: (vars: V) => Promise<unknown>) {
   });
 }
 
-export const useCreateGoal = () => useGoalMutation((body: GoalCreate) => api.createGoal(body));
+export const useCreateGoal = () =>
+  useGoalMutation((body: GoalCreate) => api.createGoal(body), { success: "Goal created — your study plan is ready" });
 export const useUpdateGoal = () =>
-  useGoalMutation(({ id, body }: { id: string; body: GoalUpdate }) => api.updateGoal(id, body));
-export const useDeleteGoal = () => useGoalMutation((id: string) => api.deleteGoal(id));
+  useGoalMutation(({ id, body }: { id: string; body: GoalUpdate }) => api.updateGoal(id, body), {
+    success: "Goal updated",
+  });
+export const useDeleteGoal = () =>
+  useGoalMutation((id: string) => api.deleteGoal(id), { success: "Goal deleted", errorToast: true });
 
 export function useStudyPlan() {
   return useQuery({ queryKey: studyPlanKey, queryFn: api.getStudyPlan });
@@ -46,6 +51,7 @@ export function useRegeneratePlan() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: api.regenerateStudyPlan,
+    meta: { success: "Study plan rebuilt", errorToast: true },
     onSuccess: (plan) => queryClient.setQueryData(studyPlanKey, plan),
   });
 }
@@ -54,6 +60,7 @@ export function useUpdateReviewItem() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: ({ id, body }: { id: string; body: ReviewItemUpdate }) => api.updateReviewItem(id, body),
+    meta: { errorToast: true },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: studyPlanKey }),
   });
 }

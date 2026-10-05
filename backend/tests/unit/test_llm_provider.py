@@ -269,3 +269,67 @@ class TestEmbed:
     async def test_close(self) -> None:
         llm, _ = provider(Recorder([]))
         await llm.aclose()
+
+
+GEMINI_DAILY_QUOTA = [
+    {
+        "error": {
+            "code": 429,
+            "message": "You exceeded your current quota, please check your plan.\n"
+            "* Quota exceeded for metric: generate_content_free_tier_requests, limit: 20",
+            "status": "RESOURCE_EXHAUSTED",
+            "details": [
+                {
+                    "@type": "type.googleapis.com/google.rpc.QuotaFailure",
+                    "violations": [
+                        {"quotaId": "GenerateRequestsPerDayPerProjectPerModel-FreeTier"}
+                    ],
+                },
+                {"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "41972s"},
+            ],
+        }
+    }
+]
+
+
+class TestQuota:
+    async def test_daily_quota_fails_fast_with_the_providers_message(self) -> None:
+        from app.ai.providers.base import LLMQuotaExceededError
+
+        rec = Recorder([httpx.Response(429, json=GEMINI_DAILY_QUOTA)] * 3)
+        llm, sleeps = provider(rec, max_retries=2)
+        with pytest.raises(LLMQuotaExceededError) as exc:
+            await llm.complete(MESSAGES, model="m")
+        assert exc.value.retryable is False and exc.value.code == "LLM_QUOTA_EXCEEDED"
+        assert "exceeded your current quota" in str(exc.value)
+        assert "\n" not in str(exc.value)  # first line only
+        assert len(rec.requests) == 1 and sleeps == []  # no pointless retries
+
+    async def test_per_minute_limits_still_retry(self) -> None:
+        per_minute = [
+            {
+                "error": {
+                    "code": 429,
+                    "message": "Rate limit",
+                    "details": [
+                        {"quotaId": "GenerateRequestsPerMinutePerProjectPerModel-FreeTier"},
+                        {"retryDelay": "21s"},
+                    ],
+                }
+            }
+        ]
+        rec = Recorder(
+            [httpx.Response(429, json=per_minute), httpx.Response(200, json=chat_body())]
+        )
+        llm, _ = provider(rec, max_retries=2)
+        assert (await llm.complete(MESSAGES, model="m")).content == "hi"
+        assert len(rec.requests) == 2
+
+    def test_daily_quota_detection(self) -> None:
+        from app.ai.providers.openai import is_daily_quota
+
+        assert is_daily_quota(json.dumps(GEMINI_DAILY_QUOTA))
+        assert is_daily_quota('{"error": {"message": "requests per day exceeded"}}')
+        assert is_daily_quota('{"retryDelay": "3600s"}')
+        assert not is_daily_quota('{"retryDelay": "20s"}')
+        assert not is_daily_quota("Too Many Requests")

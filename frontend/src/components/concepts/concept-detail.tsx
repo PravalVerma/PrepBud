@@ -4,6 +4,7 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 
 import { difficultyLabel } from "@/components/concepts/concept-browser";
+import { ConceptGraphView } from "@/components/concepts/concept-graph";
 import { Card, CardHeader } from "@/components/ui/card";
 import { Alert, Badge, Skeleton } from "@/components/ui/feedback";
 import { useConcept, useSearch } from "@/hooks/use-concepts";
@@ -202,6 +203,8 @@ export function ConceptDetailView({ id }: { id: string }) {
           )}
         </Card>
       </div>
+
+      <ConceptGraphView conceptId={concept.id} />
 
       <RelatedMaterial conceptId={concept.id} name={concept.name} />
     </div>

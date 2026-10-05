@@ -1,6 +1,9 @@
 import type { Metadata } from "next";
 
-import { PlaceholderCard } from "@/components/dashboard/placeholder-card";
+import { ActivityChart } from "@/components/dashboard/activity-chart";
+import { MasteryOverviewCard } from "@/components/dashboard/mastery-overview-card";
+import { MisconceptionsCard } from "@/components/dashboard/misconceptions-card";
+import { OnboardingChecklist } from "@/components/dashboard/onboarding-checklist";
 import { RecentSessionsCard } from "@/components/dashboard/recent-sessions-card";
 import { SubjectsCard } from "@/components/dashboard/subjects-card";
 import { WelcomeBanner } from "@/components/dashboard/welcome-banner";
@@ -12,14 +15,15 @@ export default function DashboardPage() {
   return (
     <div className="space-y-6" data-testid="dashboard">
       <WelcomeBanner />
+      <OnboardingChecklist />
       <div className="grid gap-6 lg:grid-cols-3">
-        <PlaceholderCard
-          title="Mastery overview"
-          description="Your progress across every concept."
-          phase={7}
-        />
+        <MasteryOverviewCard />
         <ReviewQueue compact />
+      </div>
+      <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+        <ActivityChart />
         <RecentSessionsCard />
+        <MisconceptionsCard />
       </div>
       <SubjectsCard />
     </div>

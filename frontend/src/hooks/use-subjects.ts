@@ -19,6 +19,7 @@ export function useCreateSubject() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (body: SubjectCreate) => api.createSubject(body),
+    meta: { success: "Subject added" },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: subjectsKey }),
   });
 }

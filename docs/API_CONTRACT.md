@@ -986,9 +986,15 @@ Returns the updated item. An item of a superseded plan, or of another user, retu
 
 ### 3.11 Mastery Dashboard
 
+**Timezone.** Days are counted in the student's timezone (`student_profiles.timezone`, falling back to UTC). This applies to the activity series, "today" and the streak.
+
+**Caching.** Responses are cached per user for 60 s. The cache is invalidated when a session completes, a document finishes processing, or the daily job runs.
+
 #### `GET /mastery/overview`
 
-Get mastery overview across all subjects.
+Get the mastery overview across all subjects.
+
+**Query params:** `?days=30`. This is how many days of `recent_activity` to return; the range is 7–365, the default 30.
 
 **Response 200:**
 ```json
@@ -1002,32 +1008,86 @@ Get mastery overview across all subjects.
         "concept_count": 45,
         "mastered_count": 12,
         "struggling_count": 5
-      }
+      },
+      {"id": null, "name": "Unsorted", "avg_mastery": 0.1, "concept_count": 3, "mastered_count": 0, "struggling_count": 0}
     ],
     "overall_stats": {
       "total_concepts": 90,
       "total_mastered": 24,
+      "in_progress": 40,
       "avg_mastery": 0.55,
       "streak_days": 5,
-      "total_study_minutes": 320
+      "total_study_minutes": 320,
+      "total_sessions": 14,
+      "questions_answered": 210,
+      "accuracy": 0.74
     },
+    "mastery_distribution": {"novice": 20, "beginner": 15, "intermediate": 18, "proficient": 13, "mastered": 24},
     "recent_activity": [
       {
         "date": "2026-09-17",
         "sessions": 2,
         "minutes": 45,
+        "questions": 12,
         "concepts_practiced": 5
       }
-    ]
+    ],
+    "misconceptions": {"active": 2, "recurring": 1, "resolved": 6},
+    "timezone": "Asia/Kolkata",
+    "generated_at": "2026-09-17T10:00:00Z"
   }
 }
 ```
 
+Field rules:
+
+- **`subjects`:** every subject the student has, including empty ones. Concepts without a subject are grouped as `{"id": null, "name": "Unsorted"}`.
+  - `mastered_count` counts concepts at ≥ 0.80 mastery.
+  - `struggling_count` counts practised concepts below 0.40.
+- **`recent_activity`:** one entry per day, oldest first, ending today. Days without activity are included with zeros.
+- **`streak_days`:** consecutive days with a session or an answered question, ending today. If the student hasn't studied yet today, the count ends yesterday.
+
 #### `GET /mastery/heatmap`
 
-Get mastery heatmap data (concepts × mastery levels).
+Get mastery heatmap data: concepts × weeks.
 
-**Query params:** `?subject_id=uuid`
+**Query params:** `?subject_id=uuid&weeks=8&limit=100`
+
+- `weeks` is 2–26.
+- `limit` is 1–300.
+- A subject that doesn't exist or belongs to someone else returns `404`.
+
+**Response 200:**
+```json
+{
+  "data": {
+    "columns": ["2026-08-30", "2026-09-06", "2026-09-13", "2026-09-17"],
+    "concepts": [
+      {
+        "id": "uuid",
+        "name": "Quadratic Formula",
+        "subject_id": "uuid",
+        "subject_name": "Mathematics",
+        "mastery_level": 0.68,
+        "label": "proficient",
+        "attempt_count": 9,
+        "last_assessed_at": "2026-09-16T18:00:00Z",
+        "next_review_at": "2026-09-19T00:00:00Z",
+        "cells": [null, 0.31, 0.55, 0.68]
+      }
+    ],
+    "total_concepts": 45,
+    "truncated": false
+  }
+}
+```
+
+How it's built:
+
+- **Columns** are week-end dates, oldest first. The last column is today.
+- **Each cell** is the concept's mastery at the end of that week, taken from its mastery history. `null` means the concept hadn't been assessed yet.
+- **The last cell** is the current stored mastery, which includes materialised decay.
+- **Concept order:** the most recently studied concepts come first.
 
 ---
 
@@ -1035,9 +1095,9 @@ Get mastery heatmap data (concepts × mastery levels).
 
 #### `GET /misconceptions`
 
-List detected misconceptions for the current user.
+List detected misconceptions for the current user. Open ones (`active`, `recurring`) come first, then newest first.
 
-**Query params:** `?status=active&concept_id=uuid`
+**Query params:** `?status=active|recurring|resolved&concept_id=uuid&page=1&per_page=20` (paginated)
 
 **Response 200:**
 ```json
@@ -1049,11 +1109,13 @@ List detected misconceptions for the current user.
         "id": "uuid",
         "name": "Sign error in differentiation",
         "description": "Believes the derivative of x^n is -nx^(n-1)",
+        "concept_id": "uuid",
         "concept_name": "Differentiation Rules"
       },
       "status": "active",
       "occurrence_count": 3,
       "detected_at": "2026-09-15T14:00:00Z",
+      "resolved_at": null,
       "evidence": [
         {
           "attempt_id": "uuid",
@@ -1062,9 +1124,12 @@ List detected misconceptions for the current user.
         }
       ]
     }
-  ]
+  ],
+  "meta": {"pagination": {"total": 1, "page": 1, "per_page": 20, "total_pages": 1}}
 }
 ```
+
+`evidence` holds the 5 most recent entries, newest first.
 
 ---
 
@@ -1074,26 +1139,36 @@ List detected misconceptions for the current user.
 
 Get AI usage stats for the current user.
 
-**Query params:** `?period=today|week|month`
+**Query params:** `?period=today|week|month`. The periods are today, the last 7 days and the last 30 days. Days are UTC, matching the daily budget.
 
 **Response 200:**
 ```json
 {
   "data": {
     "period": "today",
+    "since": "2026-09-17",
     "total_cost_usd": 0.42,
+    "today_cost_usd": 0.42,
     "daily_budget_usd": 5.00,
     "total_tokens": 15420,
     "total_interactions": 28,
+    "failed_interactions": 1,
     "by_purpose": {
-      "tutor_explanation": {"cost": 0.18, "count": 5},
-      "question_generation": {"cost": 0.08, "count": 8},
-      "answer_evaluation": {"cost": 0.06, "count": 8},
-      "concept_extraction": {"cost": 0.10, "count": 1}
-    }
+      "tutor_explanation": {"cost": 0.18, "count": 5, "tokens": 6100, "failed": 0},
+      "generate_question": {"cost": 0.08, "count": 8, "tokens": 3900, "failed": 1}
+    },
+    "by_model": {
+      "gemini-3.6-flash": {"cost": 0.30, "count": 9, "tokens": 9000, "failed": 0}
+    },
+    "daily": [{"date": "2026-09-17", "cost": 0.42, "count": 28}]
   }
 }
 ```
+
+The two breakdowns:
+
+- **`by_purpose`** keys are the operation names recorded on each AI interaction, such as `generate_question`, `evaluate_answer`, `concept_extraction` and `tutor_explanation`. It is sorted by call count.
+- **`by_model`** groups the same calls by model.
 
 ---
 

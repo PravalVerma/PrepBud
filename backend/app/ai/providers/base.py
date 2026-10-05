@@ -73,6 +73,12 @@ class LLMRateLimitError(LLMError):
     code = "LLM_RATE_LIMITED"
 
 
+class LLMQuotaExceededError(LLMError):
+    """The provider's daily quota for this model is used up — retrying today won't help."""
+
+    code = "LLM_QUOTA_EXCEEDED"
+
+
 class LLMServerError(LLMError):
     retryable = True
     code = "LLM_UNAVAILABLE"

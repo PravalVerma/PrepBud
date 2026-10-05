@@ -19,8 +19,7 @@ export async function signUp(page: Page, name = "Content Tester"): Promise<void>
 
 /** Uploads the calculus fixture and waits until the pipeline has processed it. */
 export async function uploadCalculus(page: Page): Promise<Locator> {
-  await page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: "Upload material" }).click();
-  await expect(page).toHaveURL(/\/upload$/);
+  await page.goto("/upload"); // by URL: on small screens the nav is a closed drawer
   await page.getByLabel("Choose files to upload").setInputFiles(CALCULUS_PDF);
   const row = page.getByTestId("document-row").filter({ hasText: "calculus" });
   await expect(row).toHaveAttribute("data-status", "ready", { timeout: 90_000 });

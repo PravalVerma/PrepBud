@@ -3,6 +3,7 @@
 import { type QueryClient, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef } from "react";
 
+import { dashboardKey } from "@/hooks/use-dashboard";
 import { sessionListKey } from "@/hooks/use-sessions";
 import { goalsKey, studyPlanKey } from "@/hooks/use-study-plan";
 import { api } from "@/lib/api";
@@ -13,7 +14,7 @@ import type { ClientMessage, SessionQuestion } from "@/types/session";
 /** A finished session updates history, the study plan (items ticked off, reviews
  * scheduled) and goal progress. */
 function invalidateAfterSession(queryClient: QueryClient) {
-  for (const queryKey of [sessionListKey, studyPlanKey, goalsKey]) {
+  for (const queryKey of [sessionListKey, studyPlanKey, goalsKey, dashboardKey]) {
     void queryClient.invalidateQueries({ queryKey });
   }
 }

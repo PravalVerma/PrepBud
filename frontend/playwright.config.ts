@@ -75,7 +75,15 @@ export default defineConfig({
   // machine; 5 s assertions flake on a laptop under that load.
   expect: { timeout: 15_000 },
   use: { baseURL, trace: "retain-on-failure" },
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+  projects: [
+    { name: "chromium", use: { ...devices["Desktop Chrome"] }, testIgnore: /tablet\.spec\.ts/ },
+    // AC-7.5: tablet-sized screen (iPad portrait, Chromium engine).
+    {
+      name: "tablet",
+      use: { ...devices["Desktop Chrome"], viewport: { width: 810, height: 1080 }, hasTouch: true, isMobile: false },
+      testMatch: /tablet\.spec\.ts/,
+    },
+  ],
   webServer: process.env.E2E_BASE_URL
     ? undefined
     : [

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader } from "@/components/ui/card";
@@ -9,6 +9,7 @@ import { Alert, Badge, Skeleton } from "@/components/ui/feedback";
 import { useDeleteDocument, useDocuments, useRetryDocument } from "@/hooks/use-documents";
 import { formatBytes } from "@/lib/upload";
 import { cn, formatDate } from "@/lib/utils";
+import { toast } from "@/stores/toast-store";
 import type { DocumentSummary, ProcessingStage, ProcessingStatus } from "@/types/domain";
 
 const STATUS_STYLE: Record<ProcessingStatus, string> = {
@@ -143,11 +144,27 @@ function DocumentRow({ doc }: { doc: DocumentSummary }) {
   );
 }
 
+/** Toast when a document the student is watching finishes (or fails) processing. */
+export function useProcessingToasts(documents: DocumentSummary[]) {
+  const seen = useRef(new Map<string, ProcessingStatus>());
+  useEffect(() => {
+    for (const doc of documents) {
+      const before = seen.current.get(doc.id);
+      if (before && (before === "pending" || before === "processing") && before !== doc.processing_status) {
+        if (doc.processing_status === "ready") toast.success(`“${doc.title}” is ready to study`);
+        if (doc.processing_status === "failed") toast.error(`“${doc.title}” could not be processed`);
+      }
+      seen.current.set(doc.id, doc.processing_status);
+    }
+  }, [documents]);
+}
+
 export function DocumentList() {
   const [page, setPage] = useState(1);
   const { data, isLoading, error } = useDocuments({ page, per_page: 20 });
   const documents = data?.data ?? [];
   const pagination = data?.meta.pagination;
+  useProcessingToasts(documents);
 
   return (
     <Card data-testid="document-list">

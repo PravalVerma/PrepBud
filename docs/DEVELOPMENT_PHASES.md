@@ -1,27 +1,32 @@
 # Development Phases — School in a Box
 
-> **Version:** 0.1.0-draft  
-> **Last updated:** 2026-09-17  
-> **Status:** Pre-implementation / Architecture Phase
+> **Version:** 0.2.0  
+> **Last updated:** 2026-10-05  
+> **Status:** Phases 1–7 complete · Phase 8 next
 
 ---
 
 ## Phase Overview
 
 ```
-Phase 1: Architecture & Contracts      ← YOU ARE HERE
-Phase 2: Foundation & Data Layer
-Phase 3: Content Pipeline
-Phase 4: Learning Engine Core
-Phase 5: Interactive Sessions
-Phase 6: Study Plans & Review
-Phase 7: Dashboard & Polish
-Phase 8: Deployment & Launch
+Phase 1: Architecture & Contracts      ✅
+Phase 2: Foundation & Data Layer       ✅  53602a2
+Phase 3: Content Pipeline              ✅  5f35580
+Phase 4: Learning Engine Core          ✅  12e46c2
+Phase 5: Interactive Sessions          ✅  1c43adb
+Phase 6: Study Plans & Review          ✅  6f7774f
+Phase 7: Dashboard & Polish            ✅
+Phase 8: Deployment & Launch           ← next
 ```
+
+Each completed phase lists its deliverables as built, with an **Implementation notes** block
+recording where the implementation deliberately differs from the original plan (the other
+docs carry the matching "implementation notes" sections). The repo-root `CLAUDE.md` holds the
+running log of decisions and environment notes.
 
 ---
 
-## Phase 1: Architecture & Contracts ✅ (Current)
+## Phase 1: Architecture & Contracts ✅
 
 **Goal:** Define the product, architecture, and contracts before writing application code.
 
@@ -49,51 +54,51 @@ Phase 8: Deployment & Launch
 
 ---
 
-## Phase 2: Foundation & Data Layer
+## Phase 2: Foundation & Data Layer ✅
 
 **Goal:** Set up the project, database schema, authentication, and basic CRUD API.
 
 ### Deliverables
 
 #### Backend Foundation
-- [ ] Python project setup (Poetry / pyproject.toml)
-- [ ] FastAPI application skeleton
-- [ ] Configuration system (`pydantic-settings`)
-- [ ] SQLAlchemy 2.0 models for all entities
-- [ ] Alembic migration setup + initial migration
-- [ ] Database connection management (async)
-- [ ] Base repository pattern (user-scoped queries)
+- [x] Python project setup (Poetry / pyproject.toml)
+- [x] FastAPI application skeleton
+- [x] Configuration system (`pydantic-settings`)
+- [x] SQLAlchemy 2.0 models for all entities
+- [x] Alembic migration setup + initial migration
+- [x] Database connection management (async)
+- [x] Base repository pattern (user-scoped queries)
 
 #### Authentication
-- [ ] Supabase Auth integration
-- [ ] JWT verification middleware
-- [ ] User auto-creation on first login
-- [ ] `get_current_user` dependency
+- [x] Supabase Auth integration
+- [x] JWT verification middleware
+- [x] User auto-creation on first login
+- [x] `get_current_user` dependency
 
 #### Core CRUD Endpoints
-- [ ] `GET/POST /subjects`
-- [ ] `GET/POST /courses`
-- [ ] `GET/POST /chapters`
-- [ ] `GET/POST /sections`
-- [ ] `GET/PATCH /profile`
-- [ ] `GET /health`
+- [x] `GET/POST /subjects`
+- [x] `GET/POST /courses`
+- [x] `GET/POST /chapters`
+- [x] `GET/POST /sections`
+- [x] `GET/PATCH /profile`
+- [x] `GET /health`
 
 #### Frontend Foundation
-- [ ] Next.js project setup (App Router, TypeScript)
-- [ ] Authentication flow (Supabase client SDK)
-- [ ] Basic layout (sidebar, header, content area)
-- [ ] API client utility
-- [ ] Basic pages: login, dashboard (skeleton), profile
+- [x] Next.js project setup (App Router, TypeScript)
+- [x] Authentication flow (Supabase client SDK)
+- [x] Basic layout (sidebar, header, content area)
+- [x] API client utility
+- [x] Basic pages: login, dashboard (skeleton), profile
 
 #### Infrastructure
-- [ ] Docker Compose for local development (PostgreSQL, Redis)
-- [ ] Environment variable template (`.env.example`)
-- [ ] CI pipeline: lint + unit tests
+- [x] Docker Compose for local development (PostgreSQL, Redis)
+- [x] Environment variable template (`.env.example`)
+- [x] CI pipeline: lint + unit tests
 
 #### Tests
-- [ ] Unit tests: Pydantic model validation
-- [ ] Integration tests: CRUD endpoints + user isolation
-- [ ] Auth tests: JWT verification, user auto-creation
+- [x] Unit tests: Pydantic model validation
+- [x] Integration tests: CRUD endpoints + user isolation
+- [x] Auth tests: JWT verification, user auto-creation
 
 ### Acceptance Criteria (Phase 2)
 
@@ -108,51 +113,61 @@ Phase 8: Deployment & Launch
 9. **AC-2.9:** CI pipeline passes: linting, type checking, and all tests green.
 10. **AC-2.10:** Test coverage for backend unit + integration tests ≥ 80%.
 
+**Implementation notes:**
+- Python project uses **uv** (`pyproject.toml` + `uv.lock`) rather than Poetry.
+- Auth: the browser never holds Supabase tokens — Next.js server actions sign in, session
+  cookies are httpOnly + SameSite=Strict, and a backend-for-frontend route
+  (`/api/backend/*`) forwards API calls with the Bearer token. Backend JWT verification via
+  JWKS (ES256/RS256/EdDSA) with optional legacy HS256 secret.
+- Curriculum collections are nested (`/subjects/{id}/courses`, `/courses/{id}/chapters`,
+  `/chapters/{id}/sections`); items are addressed directly.
+- CI: GitHub Actions (`.github/workflows/test.yml`) — lint, type check, tests, E2E.
+
 ---
 
-## Phase 3: Content Pipeline
+## Phase 3: Content Pipeline ✅
 
 **Goal:** Enable document upload, processing, concept extraction, and search.
 
 ### Deliverables
 
 #### Document Upload
-- [ ] S3 presigned URL generation endpoint
-- [ ] Upload confirmation endpoint
-- [ ] Document status tracking
+- [x] S3 presigned URL generation endpoint
+- [x] Upload confirmation endpoint
+- [x] Document status tracking
 
 #### Document Processing (Celery)
-- [ ] Celery + Redis setup
-- [ ] Text extraction (PDF → text via PyPDF2 / pdfplumber)
-- [ ] OCR fallback (Tesseract for image-heavy PDFs)
-- [ ] Semantic chunking
-- [ ] Concept extraction (LLM)
-- [ ] Concept relationship detection (LLM)
-- [ ] Embedding generation
-- [ ] Qdrant vector storage
-- [ ] Document ↔ Concept linking
+- [x] Celery + Redis setup
+- [x] Text extraction (PDF → text via PyPDF2 / pdfplumber)
+- [x] OCR fallback (Tesseract for image-heavy PDFs)
+- [x] Semantic chunking
+- [x] Concept extraction (LLM)
+- [x] Concept relationship detection (LLM)
+- [x] Embedding generation
+- [x] Qdrant vector storage
+- [x] Document ↔ Concept linking
 
 #### LLM Client
-- [ ] Provider-abstracted LLM client
-- [ ] OpenAI implementation
-- [ ] Configuration-driven model selection
-- [ ] Cost tracking (`AIInteraction` logging)
+- [x] Provider-abstracted LLM client
+- [x] OpenAI implementation
+- [x] Configuration-driven model selection
+- [x] Cost tracking (`AIInteraction` logging)
 
 #### Content Retrieval
-- [ ] Vector search (Qdrant)
-- [ ] Keyword search (PostgreSQL full-text)
-- [ ] Hybrid search with merge and rank
+- [x] Vector search (Qdrant)
+- [x] Keyword search (PostgreSQL full-text)
+- [x] Hybrid search with merge and rank
 
 #### Frontend
-- [ ] Document upload UI (drag & drop, progress bar)
-- [ ] Document list with processing status
-- [ ] Concept browser (list + search)
-- [ ] Concept detail page (description, documents, prerequisites)
+- [x] Document upload UI (drag & drop, progress bar)
+- [x] Document list with processing status
+- [x] Concept browser (list + search)
+- [x] Concept detail page (description, documents, prerequisites)
 
 #### Tests
-- [ ] Unit tests: chunking algorithm, concept extraction parsing
-- [ ] Integration tests: upload flow, processing pipeline (mocked LLM)
-- [ ] AI tests: concept extraction prompt produces valid JSON structure
+- [x] Unit tests: chunking algorithm, concept extraction parsing
+- [x] Integration tests: upload flow, processing pipeline (mocked LLM)
+- [x] AI tests: concept extraction prompt produces valid JSON structure
 
 ### Acceptance Criteria (Phase 3)
 
@@ -164,48 +179,57 @@ Phase 8: Deployment & Launch
 6. **AC-3.6:** Processing a 50-page PDF completes within 5 minutes.
 7. **AC-3.7:** The LLM client works with any OpenAI-compatible provider via config change.
 
+**Implementation notes:**
+- Text extraction uses **pdfplumber** (not PyPDF2), Tesseract OCR for text-less pages/images.
+- One OpenAI-compatible provider class serves OpenAI, Gemini, Groq, OpenRouter and Ollama;
+  provider + model are per-task configuration (AC-3.7).
+- Local S3 is SeaweedFS (MinIO no longer publishes images).
+- `GET /search` (hybrid vector + full-text, reciprocal-rank fusion) was **added** to
+  API_CONTRACT §3.6.1 — the contract had no search endpoint.
+- AC-3.6 assumes a hosted model; a local 3B model is markedly slower.
+
 ---
 
-## Phase 4: Learning Engine Core
+## Phase 4: Learning Engine Core ✅
 
 **Goal:** Implement the adaptive learning algorithms and session orchestration.
 
 ### Deliverables
 
 #### Student Model
-- [ ] `StudentConceptMastery` CRUD
-- [ ] Mastery update algorithm (BKT)
-- [ ] Mastery decay (Ebbinghaus)
-- [ ] Mastery caching (Redis)
+- [x] `StudentConceptMastery` CRUD
+- [x] Mastery update algorithm (BKT)
+- [x] Mastery decay (Ebbinghaus)
+- [x] Mastery caching (Redis)
 
 #### Assessment Engine
-- [ ] Question generation (LLM)
-- [ ] Answer evaluation (LLM)
-- [ ] Misconception detection (LLM)
-- [ ] Difficulty calibration
-- [ ] Question type selection by mastery level
+- [x] Question generation (LLM)
+- [x] Answer evaluation (LLM)
+- [x] Misconception detection (LLM)
+- [x] Difficulty calibration
+- [x] Question type selection by mastery level
 
 #### Concept Selection
-- [ ] Prerequisite graph traversal
-- [ ] Concept prioritisation algorithm
-- [ ] Prerequisite satisfaction check
+- [x] Prerequisite graph traversal
+- [x] Concept prioritisation algorithm
+- [x] Prerequisite satisfaction check
 
 #### Session Orchestration (LangGraph)
-- [ ] Session state definition
-- [ ] LangGraph workflow graph
-- [ ] Node implementations (INIT, PLAN, EXPLAIN, PRACTICE, REVIEW, EVALUATE, UPDATE, DECIDE, WRAP, SCHEDULE)
-- [ ] State persistence (Redis checkpointing)
-- [ ] Session resumption
+- [x] Session state definition
+- [x] LangGraph workflow graph
+- [x] Node implementations (INIT, PLAN, EXPLAIN, PRACTICE, REVIEW, EVALUATE, UPDATE, DECIDE, WRAP, SCHEDULE)
+- [x] State persistence (Redis checkpointing)
+- [x] Session resumption
 
 #### Tutor
-- [ ] Prompt templates (explain, re-explain, worked example, Socratic, follow-up)
-- [ ] Context assembly (student profile + content + mastery + history)
-- [ ] Streaming response support
+- [x] Prompt templates (explain, re-explain, worked example, Socratic, follow-up)
+- [x] Context assembly (student profile + content + mastery + history)
+- [x] Streaming response support
 
 #### Tests
-- [ ] Unit tests: mastery update, SM-2 scheduling, difficulty calibration, concept selection
-- [ ] Integration tests: full session flow (mocked LLM), mastery persistence
-- [ ] AI tests: question generation and evaluation output structure
+- [x] Unit tests: mastery update, SM-2 scheduling, difficulty calibration, concept selection
+- [x] Integration tests: full session flow (mocked LLM), mastery persistence
+- [x] AI tests: question generation and evaluation output structure
 
 ### Acceptance Criteria (Phase 4)
 
@@ -218,35 +242,42 @@ Phase 8: Deployment & Launch
 7. **AC-4.7:** Generated questions have valid structure and reference the target concept.
 8. **AC-4.8:** Frustration guard activates after 5 consecutive failures.
 
+**Implementation notes:**
+- One LangGraph turn per student message; state is checkpointed as JSON to Redis **and**
+  PostgreSQL (`learning_sessions.metadata.checkpoint`) instead of a LangGraph checkpointer
+  (whose Redis saver needs Redis Stack).
+- LEARNING_ENGINE §4.2 (BKT) and §7.1 were revised to match the implementation (soft evidence,
+  monotonic updates; re-explain only after a poor answer).
+
 ---
 
-## Phase 5: Interactive Sessions
+## Phase 5: Interactive Sessions ✅
 
 **Goal:** Build the real-time session UI and WebSocket communication.
 
 ### Deliverables
 
 #### Backend
-- [ ] WebSocket endpoint for session interaction
-- [ ] SSE streaming for tutor explanations
-- [ ] Session message protocol (client ↔ server)
-- [ ] Session lifecycle management (start, pause, resume, end)
+- [x] WebSocket endpoint for session interaction
+- [x] SSE streaming for tutor explanations
+- [x] Session message protocol (client ↔ server)
+- [x] Session lifecycle management (start, pause, resume, end)
 
 #### Frontend
-- [ ] Session page with chat-like interface
-- [ ] Streamed explanation rendering (markdown + LaTeX)
-- [ ] Question display (MCQ, short answer, true/false, etc.)
-- [ ] Answer input and submission
-- [ ] Evaluation display with feedback
-- [ ] Mastery update animation
-- [ ] Hint request button
-- [ ] Follow-up question input
-- [ ] Session summary at end
-- [ ] Session history list
+- [x] Session page with chat-like interface
+- [x] Streamed explanation rendering (markdown + LaTeX)
+- [x] Question display (MCQ, short answer, true/false, etc.)
+- [x] Answer input and submission
+- [x] Evaluation display with feedback
+- [x] Mastery update animation
+- [x] Hint request button
+- [x] Follow-up question input
+- [x] Session summary at end
+- [x] Session history list
 
 #### Tests
-- [ ] Integration tests: WebSocket message flow
-- [ ] E2E test: complete session journey (sign in → session → summary)
+- [x] Integration tests: WebSocket message flow
+- [x] E2E test: complete session journey (sign in → session → summary)
 
 ### Acceptance Criteria (Phase 5)
 
@@ -258,33 +289,40 @@ Phase 8: Deployment & Launch
 6. **AC-5.6:** LaTeX math renders correctly in explanations and questions.
 7. **AC-5.7:** The session gracefully handles LLM errors (retry, fallback message).
 
+**Implementation notes:**
+- `POST /sessions` only plans; teaching starts when a channel opens. The WebSocket is
+  authorised by a single-use 60 s ticket from `POST /sessions/{id}/ws-ticket` (the browser
+  holds no JWT); the same turns are available as SSE via `POST /sessions/{id}/messages`.
+- Every turn ends with a `turn_complete` event carrying the session view; a dropped socket
+  pauses the session. API_CONTRACT §3.8–3.9 were rewritten accordingly.
+
 ---
 
-## Phase 6: Study Plans & Review
+## Phase 6: Study Plans & Review ✅
 
 **Goal:** Implement spaced repetition scheduling and study plan management.
 
 ### Deliverables
 
 #### Backend
-- [ ] SM-2 scheduling implementation
-- [ ] Study plan generation algorithm
-- [ ] Study plan regeneration on session completion
-- [ ] Review session type (focused on due items)
-- [ ] Mastery decay Celery Beat job
-- [ ] Study plan API endpoints
+- [x] SM-2 scheduling implementation
+- [x] Study plan generation algorithm
+- [x] Study plan regeneration on session completion
+- [x] Review session type (focused on due items)
+- [x] Mastery decay Celery Beat job
+- [x] Study plan API endpoints
 
 #### Frontend
-- [ ] Study plan page (calendar or list view)
-- [ ] Review queue ("X items due today")
-- [ ] Quick review session start
-- [ ] Goal creation and management
-- [ ] Goal progress tracking
+- [x] Study plan page (calendar or list view)
+- [x] Review queue ("X items due today")
+- [x] Quick review session start
+- [x] Goal creation and management
+- [x] Goal progress tracking
 
 #### Tests
-- [ ] Unit tests: SM-2 algorithm, study plan generation, decay
-- [ ] Integration tests: plan generation on session end, review item status updates
-- [ ] E2E test: review flow journey
+- [x] Unit tests: SM-2 algorithm, study plan generation, decay
+- [x] Integration tests: plan generation on session end, review item status updates
+- [x] E2E test: review flow journey
 
 ### Acceptance Criteria (Phase 6)
 
@@ -292,39 +330,48 @@ Phase 8: Deployment & Launch
 2. **AC-6.2:** Overdue review items appear at the top of the study plan.
 3. **AC-6.3:** Creating a learning goal generates a study plan automatically.
 4. **AC-6.4:** Review intervals increase with consecutive successful reviews.
-5. **AC-6.5:** Mastery decays over time for unreviewe concepts.
+5. **AC-6.5:** Mastery decays over time for unreviewed concepts.
 6. **AC-6.6:** A student can start a review session focused on due items.
+
+**Implementation notes:**
+- One active plan per user covers all active goals; regenerating supersedes it and carries
+  today's completed/skipped items over. Plan recalculation runs inline (cheap, and the UI must
+  reflect it immediately); Celery Beat runs the daily decay + plan-refresh job.
+- Decay is computed on read and also materialised daily into `mastery_level` (exponential
+  decay composes, so it never compounds).
+- Concepts per day round up so deadlines are met. See LEARNING_ENGINE §5.2/§8 notes and
+  API_CONTRACT §3.7/§3.10.
 
 ---
 
-## Phase 7: Dashboard & Polish
+## Phase 7: Dashboard & Polish ✅
 
 **Goal:** Build the mastery dashboard, polish the UI, optimise performance.
 
 ### Deliverables
 
 #### Frontend
-- [ ] Mastery dashboard (overall progress, per-subject, per-concept)
-- [ ] Mastery heatmap or progress chart
-- [ ] Concept graph visualisation (interactive)
-- [ ] Misconception list with status
-- [ ] Activity history (sessions, study time)
-- [ ] Onboarding flow (guided first-use experience)
-- [ ] Responsive design (tablet-friendly)
-- [ ] Dark mode
-- [ ] Loading states and error boundaries
-- [ ] Toast notifications
+- [x] Mastery dashboard (overall progress, per-subject, per-concept)
+- [x] Mastery heatmap or progress chart
+- [x] Concept graph visualisation (interactive)
+- [x] Misconception list with status
+- [x] Activity history (sessions, study time)
+- [x] Onboarding flow (guided first-use experience)
+- [x] Responsive design (tablet-friendly)
+- [x] Dark mode
+- [x] Loading states and error boundaries
+- [x] Toast notifications
 
 #### Backend
-- [ ] Dashboard aggregation endpoints
-- [ ] Performance optimisation (query tuning, caching)
-- [ ] AI cost tracking endpoint
-- [ ] Error handling polish (structured errors, retries)
+- [x] Dashboard aggregation endpoints
+- [x] Performance optimisation (query tuning, caching)
+- [x] AI cost tracking endpoint
+- [x] Error handling polish (structured errors, retries)
 
 #### Tests
-- [ ] E2E tests: all critical journeys
-- [ ] Performance benchmarks
-- [ ] Accessibility audit (basic)
+- [x] E2E tests: all critical journeys
+- [x] Performance benchmarks
+- [x] Accessibility audit (basic)
 
 ### Acceptance Criteria (Phase 7)
 
@@ -334,6 +381,28 @@ Phase 8: Deployment & Launch
 4. **AC-7.4:** The onboarding flow guides a new user from sign-up to first session.
 5. **AC-7.5:** The UI is usable on tablet-sized screens.
 6. **AC-7.6:** All critical journeys pass E2E tests.
+
+**Implementation notes:**
+- New endpoints: `GET /mastery/overview` (per-subject + overall stats, mastery distribution,
+  daily activity in the student's timezone, streak, misconception counts), `GET /mastery/heatmap`
+  (concepts × weeks from mastery history), `GET /misconceptions`, `GET /ai/usage`
+  (API_CONTRACT §3.11–3.13, extended with the fields the UI needs). Aggregates are cached per user
+  in Redis for 60 s and invalidated by session completion, document processing and the daily job.
+- Dashboard: onboarding checklist (derived from real data; advances `onboarding_state`), mastery
+  overview, review queue, activity chart, recent sessions, open misconceptions. A new **Progress**
+  page adds the heatmap, misconception list with evidence, AI usage vs. budget and session history.
+  The interactive concept map (layered prerequisite layout, mastery colours, depth 1–3, keyboard
+  accessible) is on each concept page.
+- Dark mode remaps Tailwind's colour variables under `.dark` instead of adding `dark:` classes to
+  every component; a pre-paint script avoids a flash. Theme choice: system / light / dark.
+- Toasts are driven by React Query mutation `meta` (`success`, `errorToast`); queries retry
+  network/5xx/429 with backoff, never other 4xx. Every section has `loading.tsx` / `error.tsx`.
+- Tablet: the sidebar is a drawer below the `lg` breakpoint.
+- Performance: the DB pool is warmed at startup (asyncpg's SCRAM login runs on the event loop);
+  a backend benchmark checks the dashboard endpoints with 300 concepts / 3 000 answers, and an E2E
+  test asserts every page renders within 2 s (AC-7.3).
+- Accessibility: an axe audit (WCAG 2 A/AA, serious + critical) runs in E2E on every page in light
+  mode and on the main pages in dark mode.
 
 ---
 
@@ -619,12 +688,12 @@ school-in-a-box/
 | Phase | Estimated Duration | Dependencies |
 |---|---|---|
 | Phase 1: Architecture | ✅ Complete | — |
-| Phase 2: Foundation | 1–2 weeks | Phase 1 |
-| Phase 3: Content Pipeline | 1–2 weeks | Phase 2 |
-| Phase 4: Learning Engine | 2–3 weeks | Phase 3 |
-| Phase 5: Interactive Sessions | 1–2 weeks | Phase 4 |
-| Phase 6: Study Plans & Review | 1 week | Phase 4 |
-| Phase 7: Dashboard & Polish | 1–2 weeks | Phase 5, 6 |
+| Phase 2: Foundation | ✅ Complete | Phase 1 |
+| Phase 3: Content Pipeline | ✅ Complete | Phase 2 |
+| Phase 4: Learning Engine | ✅ Complete | Phase 3 |
+| Phase 5: Interactive Sessions | ✅ Complete | Phase 4 |
+| Phase 6: Study Plans & Review | ✅ Complete | Phase 4 |
+| Phase 7: Dashboard & Polish | ✅ Complete | Phase 5, 6 |
 | Phase 8: Deployment | 1 week | Phase 7 |
 | **Total** | **8–13 weeks** | |
 

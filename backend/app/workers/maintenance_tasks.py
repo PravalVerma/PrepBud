@@ -30,6 +30,7 @@ from app.config import Settings, get_settings
 from app.core.logging import get_logger
 from app.db.models import LearningGoal, StudentConceptMastery, StudyPlan
 from app.integrations.redis import create_redis
+from app.services.dashboard import invalidate_dashboard
 from app.services.student_model.mastery_tracker import MasteryTracker, cache_key
 from app.services.study_plan.plan_service import StudyPlanService
 from app.workers.celery_app import celery_app
@@ -84,6 +85,7 @@ async def refresh_learner(
         overdue = await planner.mark_overdue(user_id)
         await planner.regenerate(user_id, reason="daily")
         await session.commit()
+    await invalidate_dashboard(redis, user_id)
     if redis is not None and decayed:
         try:
             await redis.delete(*(cache_key(user_id, r.concept_id) for r in decayed))

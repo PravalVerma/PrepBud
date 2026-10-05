@@ -17,14 +17,14 @@ export function Sidebar() {
       {mobileNavOpen && (
         <div
           aria-hidden
-          className="fixed inset-0 z-30 bg-slate-900/40 md:hidden"
+          className="fixed inset-0 z-30 bg-black/40 lg:hidden"
           onClick={() => setMobileNavOpen(false)}
         />
       )}
       <aside
         id="app-sidebar"
         className={cn(
-          "fixed inset-y-0 left-0 z-40 flex w-64 flex-col border-r border-slate-200 bg-white transition-transform md:static md:translate-x-0",
+          "fixed inset-y-0 left-0 z-40 flex w-64 flex-col border-r border-slate-200 bg-white transition-transform lg:static lg:translate-x-0",
           mobileNavOpen ? "translate-x-0" : "-translate-x-full",
         )}
       >

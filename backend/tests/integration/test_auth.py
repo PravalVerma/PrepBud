@@ -112,6 +112,10 @@ async def test_every_protected_endpoint_requires_auth(client: httpx.AsyncClient)
         ("GET", "/api/v1/study-plan"),
         ("POST", "/api/v1/study-plan/regenerate"),
         ("PATCH", f"/api/v1/study-plan/items/{some_id}"),
+        ("GET", "/api/v1/mastery/overview"),
+        ("GET", "/api/v1/mastery/heatmap"),
+        ("GET", "/api/v1/misconceptions"),
+        ("GET", "/api/v1/ai/usage"),
     ]
     for method, path in calls:
         resp = await client.request(method, path, json={})

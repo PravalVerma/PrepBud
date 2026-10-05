@@ -8,6 +8,7 @@ from app.api import (
     documents,
     goals,
     health,
+    mastery,
     profile,
     sessions,
     study_plan,
@@ -29,6 +30,7 @@ _protected.include_router(concepts.search_router)
 _protected.include_router(sessions.router)
 _protected.include_router(goals.router)
 _protected.include_router(study_plan.router)
+_protected.include_router(mastery.router)
 api_router.include_router(_protected)
 # The session WebSocket authenticates with a single-use ticket, not a bearer token.
 api_router.include_router(sessions.ws_router)

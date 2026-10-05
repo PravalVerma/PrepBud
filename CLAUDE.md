@@ -11,11 +11,13 @@ single source of truth. Read this file first, then the doc sections relevant to 
 | 2 Foundation & data layer | ✅ committed (`53602a2`) |
 | 3 Content pipeline | ✅ committed (`5f35580`) |
 | 4 Learning engine core | ✅ committed (`12e46c2`) |
-| 5 Interactive sessions | ✅ complete — commit message provided (user commits; check `git log`) |
-| 6 Study plans & review | ✅ implemented, all AC-6.x verified (vitest 161, E2E 9/9) — **awaiting user review/commit** |
-| 7–8 | not started — **ask the user before starting each new phase** |
+| 5 Interactive sessions | ✅ committed (`1c43adb`) |
+| 6 Study plans & review | ✅ committed (`6f7774f`) |
+| 7 Dashboard & polish | ✅ implemented, all AC-7.x verified (vitest 185, E2E 13/13 incl. tablet + axe) — **awaiting user review/commit** |
+| 8 Deployment & launch | not started — **ask the user before starting** |
 
-Each phase's deliverables + acceptance criteria (AC-x.y) live in `docs/DEVELOPMENT_PHASES.md`.
+Each phase's deliverables + acceptance criteria (AC-x.y) live in `docs/DEVELOPMENT_PHASES.md`
+(keep its checkboxes, overview and per-phase **Implementation notes** current at phase end).
 At the end of a phase: report AC status, update this table, stop. Never commit/push unless asked
 (the user commits; end commit messages with the Co-Authored-By line from the system prompt).
 
@@ -47,6 +49,8 @@ backend/   FastAPI app (uv, Python 3.12)
   app/api/sessions.py      REST + SSE + WebSocket; learning_engine/tickets.py (WS tickets) [Phase 5]
   app/api/goals.py, study_plan.py; services/study_plan/ (plan_generator = pure, plan_service =
           DB); workers/maintenance_tasks.py (Celery Beat daily job)                    [Phase 6]
+  app/api/mastery.py (overview, heatmap, misconceptions, ai/usage); services/dashboard.py;
+          db/repositories/dashboard.py                                              [Phase 7]
   app/integrations/        redis, s3, qdrant
   alembic/versions/        hand-written DDL (one statement per execute — asyncpg)
   tests/unit, tests/integration (testcontainers or TEST_DATABASE_URL/TEST_REDIS_URL), tests/ai
@@ -58,6 +62,8 @@ frontend/  Next.js 16 (App Router, React 19, Tailwind v4, TanStack Query 5, Zust
   src/app/session(/[id]); components/session/*; lib/session-socket.ts (ticket + reconnect);
           stores/session-store.ts (pure event reducer); hooks/use-session-channel.ts
   src/app/goals, src/app/review (study plan + review queue); hooks/use-study-plan.ts
+  src/app/progress; components/dashboard/*, progress/*, concepts/concept-graph.tsx;
+          lib/theme.ts (dark mode), stores/toast-store.ts + ui/toaster.tsx, lib/errors.ts
   tests/ (vitest), tests/e2e (Playwright: mock Supabase Auth :54329, mock LLM :54330,
           API :8002, worker on Celery queue "e2e", web :3100)
 docs/      the spec — PRODUCT_REQUIREMENTS, ARCHITECTURE(+_DECISIONS), DOMAIN_MODEL, DATA_MODEL,
@@ -178,6 +184,25 @@ docs/      the spec — PRODUCT_REQUIREMENTS, ARCHITECTURE(+_DECISIONS), DOMAIN_
   compounding; history gets one point per 0.05 drop (`closed` entries). Run Beat: `make dev-beat`.
 - Goal scope: explicit concepts → course (chapters or documents in the course) → subject → everything.
   Progress = mean(min(mastery/0.8, 1)); `all_mastered` reported, status never auto-changed.
+
+### Phase 7 decisions (dashboard & polish)
+
+- Dashboard endpoints bucket days in the student's `student_profiles.timezone`; aggregates cached
+  in Redis 60 s under `dash:{user}:v{n}:…`; `invalidate_dashboard()` (INCR version) runs on session
+  completion, document processed, daily job. Overview/heatmap read *stored* mastery (decay is
+  materialised daily). Heatmap = concepts × week-ends from `history`.
+- **Dark mode = palette remap** in `globals.css` (`:root.dark` redefines slate/brand/emerald/amber/
+  red/violet variables; `.bg-white` → card colour; dark `slate-500` lifted to 68% L for AA). No
+  `dark:` classes needed in components — keep using the palette; avoid raw hex colours. Mastery
+  colours use only 300–600 shades (`lib/mastery.ts`) so they read in both themes. Pre-paint
+  `THEME_SCRIPT` in the root layout; `<html suppressHydrationWarning>`.
+- Toasts: React Query `meta: { success?, errorToast? }` (typed via `Register`); forms keep inline
+  errors. Query retry: network/5xx/429 only, backoff. Each section has `loading.tsx`/`error.tsx`.
+- Sidebar drawer below `lg` (tablet portrait = drawer). E2E projects: `chromium` + `tablet`
+  (810×1080). `quality.spec.ts`: page renders < 2 s (after warm-up) + axe (wcag2a/aa,
+  serious/critical) light on all pages, dark on main pages.
+- Onboarding checklist derives steps from data and PATCHes `onboarding_state` forward; "Skip
+  guide"/"Done" sets `complete`.
 
 ## Local environment (this machine)
 

@@ -45,6 +45,7 @@ from app.core.logging import get_logger
 from app.db.models import AITrace, Concept, LearningGoal, LearningSession, SessionEvent
 from app.integrations.qdrant import SectionVectorStore
 from app.services.content.retriever import HybridRetriever
+from app.services.dashboard import invalidate_dashboard
 from app.services.learning_engine.orchestrator import (
     Emitter,
     EngineDeps,
@@ -66,6 +67,9 @@ ERROR_MESSAGES = {
     "LLM_TIMEOUT": "The AI is taking longer than expected. Please try again.",
     "LLM_UNAVAILABLE": "The AI service is unavailable right now. Please try again in a moment.",
     "LLM_RATE_LIMITED": "The AI service is busy. Please try again in a moment.",
+    "LLM_QUOTA_EXCEEDED": (
+        "The AI provider's daily quota is used up, so we are wrapping up for today."
+    ),
 }
 
 
@@ -302,6 +306,7 @@ class SessionManager:
                     attempted=[uuid.UUID(a["concept_id"]) for a in state["attempts"]],
                 )
                 await db.commit()
+            await invalidate_dashboard(self.redis, user_id)
         except Exception:
             logger.exception(
                 "study plan update after session failed", extra={"session_id": str(session_id)}
@@ -603,6 +608,8 @@ class SessionManager:
             message = ERROR_MESSAGES.get(exc.code, "Something went wrong with the AI service.")
         elif isinstance(exc, AIBudgetExceededError):
             message = "Your daily AI budget has been reached, so we are wrapping up for today."
+        elif exc.code in ERROR_MESSAGES:
+            message = ERROR_MESSAGES[exc.code]
         else:
             message = "The AI service is not responding properly, so we are wrapping up."
         error = {

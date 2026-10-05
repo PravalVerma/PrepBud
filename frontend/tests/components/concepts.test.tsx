@@ -11,6 +11,7 @@ import { jsonResponse, meta, renderWithQuery } from "./test-utils";
 vi.mock("next/link", () => ({
   default: (props: React.AnchorHTMLAttributes<HTMLAnchorElement>) => <a {...props} />,
 }));
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 
 const fetchMock = vi.fn<typeof fetch>();
 const page = (data: unknown[], total = data.length, totalPages = data.length ? 1 : 0) => ({

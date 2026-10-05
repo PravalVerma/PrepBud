@@ -43,6 +43,14 @@ import type {
   WsTicket,
 } from "@/types/session";
 import type {
+  AIUsage,
+  MasteryHeatmap,
+  MasteryOverview,
+  MisconceptionStatus,
+  StudentMisconception,
+  UsagePeriod,
+} from "@/types/dashboard";
+import type {
   Goal,
   GoalCreate,
   GoalStatus,
@@ -219,4 +227,12 @@ export const api = {
   regenerateStudyPlan: () => data<StudyPlan>("POST", "/study-plan/regenerate"),
   updateReviewItem: (id: string, body: ReviewItemUpdate) =>
     data<ReviewItem>("PATCH", `/study-plan/items/${id}`, body),
+
+  // Dashboard (API_CONTRACT §3.11–3.13)
+  getMasteryOverview: (days = 30) => data<MasteryOverview>("GET", `/mastery/overview${query({ days })}`),
+  getMasteryHeatmap: (params: { subject_id?: string; weeks?: number; limit?: number } = {}) =>
+    data<MasteryHeatmap>("GET", `/mastery/heatmap${query(params)}`),
+  listMisconceptions: (params: PageParams & { status?: MisconceptionStatus; concept_id?: string } = {}) =>
+    request<PaginatedEnvelope<StudentMisconception>>("GET", `/misconceptions${query(params)}`),
+  getAIUsage: (period: UsagePeriod = "today") => data<AIUsage>("GET", `/ai/usage${query({ period })}`),
 };

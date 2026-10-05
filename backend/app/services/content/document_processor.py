@@ -78,6 +78,7 @@ from app.services.content.text_extractor import (
     OCREngine,
     extract_text,
 )
+from app.services.dashboard import invalidate_dashboard
 from app.services.study_plan.plan_service import StudyPlanService
 
 logger = get_logger(__name__)
@@ -90,6 +91,10 @@ USER_MESSAGES = {
     "LLM_UNAVAILABLE": "The AI service is unavailable right now. Please retry later.",
     "LLM_TIMEOUT": "The AI service timed out. Please retry later.",
     "LLM_RATE_LIMITED": "The AI service is busy. Please retry later.",
+    "LLM_QUOTA_EXCEEDED": (
+        "The AI provider's daily quota for this model is used up. Retry tomorrow, "
+        "or switch to another model in the settings."
+    ),
     "LLM_BAD_RESPONSE": "The AI service rejected the request. Please retry later.",
     "LLM_INVALID_OUTPUT": "The AI returned an unusable answer. Please retry.",
     "STORAGE_UNAVAILABLE": "The uploaded file could not be read from storage.",
@@ -556,6 +561,7 @@ class DocumentProcessor:
     async def _refresh_study_plan(self, ctx: _Context) -> None:
         """New concepts can belong to an active goal: replan (LEARNING_ENGINE §8.3). Best
         effort — the document is ready either way."""
+        await invalidate_dashboard(self.redis, ctx.user_id)  # new concepts to count
         try:
             async with self.sessionmaker() as session:
                 has_goal = await session.scalar(

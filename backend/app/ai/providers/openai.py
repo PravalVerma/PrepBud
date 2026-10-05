@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
@@ -21,6 +22,7 @@ from app.ai.providers.base import (
     LLMError,
     LLMMessage,
     LLMProvider,
+    LLMQuotaExceededError,
     LLMRateLimitError,
     LLMResponse,
     LLMResponseError,
@@ -42,14 +44,40 @@ def _retry_after(response: httpx.Response) -> float | None:
         return None
 
 
+# Long retry delays (Google's RetryInfo) mean a daily quota, not a per-minute limit.
+DAILY_QUOTA_MIN_DELAY_SECONDS = 600
+
+
+def _retry_delay_seconds(body: str) -> float | None:
+    match = re.search(r'"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"', body)
+    return float(match.group(1)) if match else None
+
+
+def is_daily_quota(body: str) -> bool:
+    """A 429 for an exhausted daily quota (Gemini: ``…PerDay…`` quota id or a retry delay of
+    many minutes) — as opposed to a per-minute rate limit, which is worth retrying."""
+    if re.search(r"PerDay|per[ _-]?day", body, re.IGNORECASE):
+        return True
+    delay = _retry_delay_seconds(body)
+    return delay is not None and delay >= DAILY_QUOTA_MIN_DELAY_SECONDS
+
+
 def _error_for(response: httpx.Response) -> LLMError:
+    message = None
     try:
-        detail = response.json().get("error", {})
+        payload = response.json()
+        if isinstance(payload, list) and payload:  # Gemini wraps the error in a list
+            payload = payload[0]
+        detail = payload.get("error", {}) if isinstance(payload, dict) else payload
         message = detail.get("message") if isinstance(detail, dict) else str(detail)
     except (ValueError, AttributeError):
         message = None
+    if message:
+        message = message.split("\n")[0][:300]
     text = f"Provider returned HTTP {response.status_code}" + (f": {message}" if message else "")
     if response.status_code == 429:
+        if is_daily_quota(response.text):
+            return LLMQuotaExceededError(text)
         return LLMRateLimitError(text)
     if response.status_code >= 500:
         return LLMServerError(text)

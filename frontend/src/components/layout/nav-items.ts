@@ -13,5 +13,6 @@ export const NAV_ITEMS: NavItem[] = [
   { href: "/session", label: "Study session", icon: "▶" },
   { href: "/goals", label: "Goals", icon: "◎" },
   { href: "/review", label: "Review", icon: "↻" },
+  { href: "/progress", label: "Progress", icon: "▤" },
   { href: "/profile", label: "Profile", icon: "◉" },
 ];
