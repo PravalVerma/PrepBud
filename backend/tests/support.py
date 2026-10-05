@@ -16,6 +16,15 @@ TEST_SUPABASE_URL = "https://test-project.supabase.co"
 TEST_ISSUER = f"{TEST_SUPABASE_URL}/auth/v1"
 TEST_AUDIENCE = "authenticated"
 TEST_KID = "test-es256-key"
+TEST_BUCKET = "siab-test-uploads"
+FAKE_TASKS = (
+    "tutor_explanation",
+    "question_generation",
+    "answer_evaluation",
+    "misconception_detection",
+    "concept_extraction",
+    "session_summary",
+)
 
 EC_PRIVATE_KEY = ec.generate_private_key(ec.SECP256R1())
 OTHER_EC_PRIVATE_KEY = ec.generate_private_key(ec.SECP256R1())
@@ -28,7 +37,18 @@ def build_settings(**overrides: Any) -> Settings:
         "supabase_url": TEST_SUPABASE_URL,
         "supabase_jwt_secret": TEST_JWT_SECRET,
         "rate_limit_enabled": True,
+        "rate_limit_uploads_per_hour": 1000,
         "qdrant_url": "",
+        "s3_bucket": TEST_BUCKET,
+        "s3_access_key_id": "testing",
+        "s3_secret_access_key": "testing",
+        # Every AI task goes to the in-process fake provider (tests/fakes.py).
+        "llm_tasks": {task: {"provider": "fake", "model": f"fake-{task}"} for task in FAKE_TASKS}
+        | {"embedding": {"provider": "fake", "model": "fake-embedding", "dimensions": 64}},
+        "ai_pricing": {
+            f"fake-{task}": {"input_per_1m": 1.0, "output_per_1m": 2.0} for task in FAKE_TASKS
+        }
+        | {"fake-embedding": {"input_per_1m": 0.5}},
     }
     values.update(overrides)
     return Settings(_env_file=None, **values)  # type: ignore[call-arg]
@@ -48,7 +68,8 @@ def make_claims(
     sub: str = "auth-user-a",
     email: str | None = "student-a@example.com",
     *,
-    exp_delta: int = 300,
+    # Long-lived: modules build headers at import time and the suite runs for minutes.
+    exp_delta: int = 86_400,
     aud: str | None = TEST_AUDIENCE,
     iss: str | None = TEST_ISSUER,
     **extra: Any,

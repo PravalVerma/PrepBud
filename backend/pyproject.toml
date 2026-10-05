@@ -17,6 +17,14 @@ dependencies = [
     "httpx>=0.27",
     "redis>=5.0",
     "tzdata>=2024.1",
+    "celery[redis]>=5.4",
+    "qdrant-client>=1.12",
+    "boto3>=1.35",
+    "pdfplumber>=0.11",
+    "pytesseract>=0.3.13",
+    "pillow>=10.4",
+    "jinja2>=3.1",
+    "kombu>=5.6,<5.7",
 ]
 
 [dependency-groups]
@@ -27,6 +35,10 @@ dev = [
     "testcontainers[postgres,redis]>=4.8",
     "ruff>=0.6",
     "mypy>=1.11",
+    "moto[s3]>=5.0",
+    "fpdf2>=2.8",
+    "boto3-stubs[s3]>=1.35",
+    "celery-types>=0.22",
 ]
 
 [build-system]
@@ -51,7 +63,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101", "S105", "S106"]
+"tests/**" = ["S101", "S105", "S106", "PT018"]
 
 [tool.ruff.lint.isort]
 known-third-party = ["alembic"]
@@ -67,7 +79,7 @@ plugins = ["pydantic.mypy"]
 exclude = ["alembic/versions/"]
 
 [[tool.mypy.overrides]]
-module = ["testcontainers.*"]
+module = ["testcontainers.*", "pytesseract.*", "moto.*", "fpdf.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
@@ -86,13 +98,14 @@ markers = [
 ]
 filterwarnings = [
     "ignore::DeprecationWarning:testcontainers.*",
+    # In-memory Qdrant (tests) ignores payload indexes; the server honours them.
+    "ignore:Payload indexes have no effect:UserWarning",
 ]
 
 [tool.coverage.run]
 source = ["app"]
 branch = true
 concurrency = ["thread", "greenlet"]
-omit = ["app/workers/*", "app/ai/*", "app/integrations/qdrant.py", "app/integrations/s3.py"]
 
 [tool.coverage.report]
 fail_under = 80

@@ -9,12 +9,15 @@ from fastapi import Depends, Query, Request, Response, Security
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.cost_tracker import AIUsageRecorder
+from app.ai.llm_client import LLMClient
 from app.config import Settings
 from app.core.exceptions import (
     AuthenticationError,
     ConflictError,
     ForbiddenError,
     RateLimitedError,
+    ServiceUnavailableError,
 )
 from app.core.logging import get_logger, user_id_ctx
 from app.core.middleware import SlidingWindowRateLimiter
@@ -23,6 +26,9 @@ from app.db.models import User
 from app.db.repositories.base import PageRequest
 from app.db.repositories.user import AuthIdentity, UserRepository
 from app.domain.common import DEFAULT_PER_PAGE, MAX_PER_PAGE
+from app.integrations.qdrant import SectionVectorStore
+from app.integrations.s3 import ObjectStorage
+from app.services.content.document_processor import TaskQueue
 
 logger = get_logger(__name__)
 
@@ -113,12 +119,18 @@ PageParams = Annotated[PageRequest, Depends(get_page_request)]
 
 
 async def _enforce_rate_limit(
-    request: Request, response: Response, *, subject: str, scope: str, limit: int
+    request: Request,
+    response: Response,
+    *,
+    subject: str,
+    scope: str,
+    limit: int,
+    window_seconds: int = 60,
 ) -> None:
     settings: Settings = request.app.state.settings
     if not settings.rate_limit_enabled:
         return
-    limiter = SlidingWindowRateLimiter(request.app.state.redis)
+    limiter = SlidingWindowRateLimiter(request.app.state.redis, window_seconds)
     try:
         result = await limiter.hit(subject, scope, limit)
     except Exception as exc:
@@ -149,3 +161,59 @@ async def rate_limit_auth(request: Request, response: Response, claims: TokenCla
         scope="auth",
         limit=settings.rate_limit_auth_per_minute,
     )
+
+
+async def rate_limit_uploads(request: Request, response: Response, user: CurrentUser) -> None:
+    """Document uploads: N per user per hour (SECURITY_MODEL §5.1)."""
+    settings: Settings = request.app.state.settings
+    await _enforce_rate_limit(
+        request,
+        response,
+        subject=str(user.id),
+        scope="upload",
+        limit=settings.rate_limit_uploads_per_hour,
+        window_seconds=3600,
+    )
+
+
+# --- Phase 3 services (created at startup; ``None`` when not configured) ---------------------
+
+
+def get_storage(request: Request) -> ObjectStorage:
+    storage: ObjectStorage | None = request.app.state.storage
+    if storage is None:
+        raise ServiceUnavailableError("File storage is not configured")
+    return storage
+
+
+def get_optional_storage(request: Request) -> ObjectStorage | None:
+    storage: ObjectStorage | None = request.app.state.storage
+    return storage
+
+
+def get_vector_store(request: Request) -> SectionVectorStore | None:
+    vectors: SectionVectorStore | None = request.app.state.vector_store
+    return vectors
+
+
+def get_task_queue(request: Request) -> TaskQueue:
+    queue: TaskQueue = request.app.state.task_queue
+    return queue
+
+
+def get_llm(request: Request) -> LLMClient:
+    llm: LLMClient = request.app.state.llm
+    return llm
+
+
+def get_recorder(request: Request) -> AIUsageRecorder:
+    recorder: AIUsageRecorder = request.app.state.ai_recorder
+    return recorder
+
+
+Storage = Annotated[ObjectStorage, Depends(get_storage)]
+OptionalStorage = Annotated[ObjectStorage | None, Depends(get_optional_storage)]
+VectorStore = Annotated[SectionVectorStore | None, Depends(get_vector_store)]
+Queue = Annotated[TaskQueue, Depends(get_task_queue)]
+LLM = Annotated[LLMClient, Depends(get_llm)]
+Recorder = Annotated[AIUsageRecorder, Depends(get_recorder)]

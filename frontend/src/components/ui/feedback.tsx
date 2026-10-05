@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { HTMLAttributes, ReactNode } from "react";
 
 import { cn } from "@/lib/utils";
 
@@ -25,9 +25,10 @@ export function Alert({ tone = "info", children }: { tone?: Tone; children: Reac
   );
 }
 
-export function Badge({ children, className }: { children: ReactNode; className?: string }) {
+export function Badge({ children, className, ...props }: HTMLAttributes<HTMLSpanElement>) {
   return (
     <span
+      {...props}
       className={cn(
         "inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600",
         className,

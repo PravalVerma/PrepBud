@@ -13,13 +13,25 @@ import type {
 } from "@/types/api";
 import type {
   Chapter,
+  ConceptDetail,
+  ConceptFilters,
+  ConceptGraph,
+  ConceptListItem,
+  ConfirmUploadResponse,
   Course,
   CurriculumNodeCreate,
+  DocumentDetail,
+  DocumentSummary,
+  ProcessingStatus,
   Profile,
   ProfileUpdate,
+  SearchHit,
+  SearchMode,
   Section,
   Subject,
   SubjectCreate,
+  UploadUrlRequest,
+  UploadUrlResponse,
 } from "@/types/domain";
 
 export const API_BASE = "/api/backend";
@@ -57,11 +69,15 @@ export class ApiError extends Error {
   }
 }
 
-function query(params?: PageParams): string {
+type QueryValue = string | number | undefined | null;
+
+/** Query string from page params plus optional filters (empty values are skipped). */
+export function query(params?: object): string {
   if (!params) return "";
   const qs = new URLSearchParams();
-  if (params.page) qs.set("page", String(params.page));
-  if (params.per_page) qs.set("per_page", String(params.per_page));
+  for (const [key, value] of Object.entries(params) as [string, QueryValue][]) {
+    if (value !== undefined && value !== null && value !== "") qs.set(key, String(value));
+  }
   const s = qs.toString();
   return s ? `?${s}` : "";
 }
@@ -133,4 +149,33 @@ export const api = {
     request<PaginatedEnvelope<Section>>("GET", `/chapters/${chapterId}/sections${query(params)}`),
   createSection: (chapterId: string, body: CurriculumNodeCreate) =>
     data<Section>("POST", `/chapters/${chapterId}/sections`, body),
+
+  // Documents (API_CONTRACT §3.5)
+  requestUploadUrl: (body: UploadUrlRequest) =>
+    data<UploadUrlResponse>("POST", "/documents/upload-url", body),
+  confirmUpload: (documentId: string) =>
+    data<ConfirmUploadResponse>("POST", `/documents/${documentId}/confirm-upload`),
+  listDocuments: (
+    params?: PageParams & { status?: ProcessingStatus; subject_id?: string; course_id?: string },
+  ) => request<PaginatedEnvelope<DocumentSummary>>("GET", `/documents${query(params)}`),
+  getDocument: (id: string) => data<DocumentDetail>("GET", `/documents/${id}`),
+  deleteDocument: (id: string) => request<void>("DELETE", `/documents/${id}`),
+
+  // Concepts (API_CONTRACT §3.6)
+  listConcepts: (params?: PageParams & ConceptFilters) =>
+    request<PaginatedEnvelope<ConceptListItem>>("GET", `/concepts${query(params)}`),
+  getConcept: (id: string) => data<ConceptDetail>("GET", `/concepts/${id}`),
+  getConceptGraph: (id: string, depth = 1) =>
+    data<ConceptGraph>("GET", `/concepts/${id}/graph${query({ depth })}`),
+
+  // Hybrid search over document sections
+  search: (
+    params: PageParams & {
+      q: string;
+      mode?: SearchMode;
+      subject_id?: string;
+      document_id?: string;
+      concept_id?: string;
+    },
+  ) => request<PaginatedEnvelope<SearchHit>>("GET", `/search${query(params)}`),
 };

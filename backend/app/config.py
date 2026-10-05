@@ -7,10 +7,12 @@ hard-coded. Model selection for every AI task is configuration-driven (ADR-003).
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field, SecretStr
+from pydantic import BaseModel, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+OPENAI_BASE_URL = "https://api.openai.com/v1"
 
 
 class LLMTaskConfig(BaseModel):
@@ -65,6 +67,64 @@ def _default_llm_tasks() -> dict[str, LLMTaskConfig]:
             provider="openai", model="text-embedding-3-small", dimensions=1536
         ),
     }
+
+
+class LLMProviderConfig(BaseModel):
+    """An OpenAI-compatible endpoint (OpenAI, Ollama, vLLM, LM Studio, Together, Groq, …).
+
+    AC-3.7: switching provider is a configuration change — point a task's ``provider``
+    at another entry here (or change ``LLM_BASE_URL`` for the default provider).
+    """
+
+    base_url: str = OPENAI_BASE_URL
+    api_key: SecretStr = SecretStr("")
+    timeout_seconds: float = 120.0
+    max_retries: int = 2
+    # `response_format={"type": "json_object"}`; when False the prompt alone asks for JSON.
+    supports_json_mode: bool = True
+    # Send the embedding task's `dimensions` (OpenAI text-embedding-3 models accept it).
+    supports_dimensions_param: bool = True
+
+
+class ModelPricing(BaseModel):
+    """USD per million tokens (used for `ai_interactions.cost_estimate`)."""
+
+    input_per_1m: float = 0.0
+    output_per_1m: float = 0.0
+
+
+def _default_pricing() -> dict[str, ModelPricing]:
+    return {
+        "gpt-4o": ModelPricing(input_per_1m=2.50, output_per_1m=10.00),
+        "gpt-4o-mini": ModelPricing(input_per_1m=0.15, output_per_1m=0.60),
+        "text-embedding-3-small": ModelPricing(input_per_1m=0.02),
+        "text-embedding-3-large": ModelPricing(input_per_1m=0.13),
+    }
+
+
+class ContentProcessingSettings(BaseModel):
+    """Document pipeline parameters (AI_SYSTEM_DESIGN §5)."""
+
+    upload_max_bytes: int = 50 * 1024 * 1024
+    max_pages: int = 500
+    chunk_min_tokens: int = 500
+    chunk_max_tokens: int = 1000
+    chunk_overlap_tokens: int = 100
+    # Concept extraction sends several chunks per LLM call, several calls at once.
+    extraction_batch_tokens: int = 3000
+    extraction_concurrency: int = 6
+    extraction_cache_ttl_seconds: int = 86_400
+    max_concepts_per_document: int = 200
+    relationship_batch_size: int = 80
+    existing_concepts_context: int = 80
+    embedding_batch_size: int = 64
+    # Pages yielding fewer characters than this are OCR'd (scanned / image-only pages).
+    ocr_min_chars_per_page: int = 25
+    ocr_language: str = "eng"
+    ocr_resolution_dpi: int = 200
+    processing_lock_ttl_seconds: int = 900
+    task_soft_time_limit_seconds: int = 600
+    task_max_retries: int = 3
 
 
 class LearningEngineSettings(BaseModel):
@@ -134,20 +194,92 @@ class Settings(BaseSettings):
     # --- Health ----------------------------------------------------------------
     health_check_timeout_seconds: float = 2.0
 
-    # --- Later phases ----------------------------------------------------------
+    rate_limit_uploads_per_hour: int = 5
+
+    # --- Vector store (Qdrant) -------------------------------------------------
     qdrant_url: str = ""
     qdrant_api_key: SecretStr = SecretStr("")
+    qdrant_sections_collection: str = "document_sections"
+    qdrant_timeout_seconds: float = 10.0
+
+    # --- Object storage (S3-compatible) ----------------------------------------
     s3_endpoint_url: str = ""
+    # Endpoint used inside presigned URLs, when browsers reach S3 by another host
+    # than the API does (e.g. Docker networking). Defaults to s3_endpoint_url.
+    s3_public_endpoint_url: str = ""
+    s3_region: str = "us-east-1"
     s3_bucket: str = ""
     s3_access_key_id: str = ""
     s3_secret_access_key: SecretStr = SecretStr("")
+    s3_presign_expiry_seconds: int = 3600
+
+    # --- Background jobs (Celery) ----------------------------------------------
+    celery_broker_url: str = ""
+    celery_result_backend: str = ""
+    celery_task_always_eager: bool = False
+    # Queue the API publishes to and workers consume (separate stacks can share Redis).
+    celery_queue: str = "default"
+
+    # --- AI ----------------------------------------------------------------------
     llm_default_provider: str = "openai"
     llm_api_key: SecretStr = SecretStr("")
     llm_base_url: str = ""
+    llm_providers: dict[str, LLMProviderConfig] = Field(default_factory=dict)
     llm_tasks: dict[str, LLMTaskConfig] = Field(default_factory=_default_llm_tasks)
+    ai_pricing: dict[str, ModelPricing] = Field(default_factory=_default_pricing)
+    # Store full prompts/responses in ai_interactions.metadata (SECURITY_MODEL §7.3).
+    ai_log_content: bool = True
     ai_daily_budget_usd: float = 5.00
     ai_session_token_budget: int = 50_000
+    content: ContentProcessingSettings = Field(default_factory=ContentProcessingSettings)
     learning_engine: LearningEngineSettings = Field(default_factory=LearningEngineSettings)
+
+    @field_validator("llm_tasks", mode="before")
+    @classmethod
+    def _merge_llm_tasks(cls, value: Any) -> Any:
+        """Overlay configured tasks onto the defaults, field by field.
+
+        ``LLM_TASKS__CONCEPT_EXTRACTION__MODEL=llama3.1`` changes only that model.
+        """
+        if not isinstance(value, dict):
+            return value
+        merged: dict[str, Any] = {k: v.model_dump() for k, v in _default_llm_tasks().items()}
+        for name, cfg in value.items():
+            override = cfg.model_dump() if isinstance(cfg, BaseModel) else cfg
+            key = str(name).lower()
+            merged[key] = (
+                {**merged.get(key, {}), **override} if isinstance(override, dict) else override
+            )
+        return merged
+
+    @field_validator("ai_pricing", mode="before")
+    @classmethod
+    def _merge_pricing(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        return {**{k: v.model_dump() for k, v in _default_pricing().items()}, **value}
+
+    def llm_provider(self, name: str) -> LLMProviderConfig:
+        """Provider config by name. The default provider falls back to LLM_BASE_URL/LLM_API_KEY."""
+        if name in self.llm_providers:
+            return self.llm_providers[name]
+        if name == self.llm_default_provider:
+            return LLMProviderConfig(
+                base_url=self.llm_base_url or OPENAI_BASE_URL, api_key=self.llm_api_key
+            )
+        raise KeyError(name)
+
+    @property
+    def broker_url(self) -> str:
+        return self.celery_broker_url or self.redis_url
+
+    @property
+    def result_backend_url(self) -> str:
+        return self.celery_result_backend or self.redis_url
+
+    @property
+    def embedding_dimensions(self) -> int:
+        return self.llm_tasks["embedding"].dimensions or 1536
 
     @property
     def cors_origins(self) -> list[str]:

@@ -297,6 +297,24 @@ Get document details including extracted concepts.
 
 Delete a document and its associated data.
 
+#### Document endpoints — implementation notes (Phase 3)
+
+- **Upload rules:** `mime_type` ∈ `application/pdf`, `text/plain`, `image/png`, `image/jpeg`, with a matching file extension. Max 50 MB. Violations return `400 VALIDATION_ERROR`.
+- **Ownership checks:** `subject_id`/`course_id` must be the caller's (`404` otherwise). If only `course_id` is given, `subject_id` is inferred from it; a course outside the given subject returns `422`. An optional `title` defaults to the file name.
+- **Rate limit:** `upload-url` is limited to 5 per user per hour (`429`).
+- **`upload_headers`:** the `upload-url` response also returns this map. These headers are part of the signature, so the client must send them with the `PUT`.
+- **`confirm-upload` outcomes:**
+  - It checks the stored object. Missing → `422`, `details.reason = "UPLOAD_NOT_FOUND"`. Size or type differs from what was declared → `422`, `FILE_SIZE_MISMATCH` / `FILE_TYPE_MISMATCH`, and the document is marked `failed`.
+  - Calling it again while `processing` is idempotent: same `202` and `task_id`.
+  - On a `failed` document it re-queues processing.
+  - On a `ready` document it returns `409`.
+- **`processing_metadata`:**
+  - Keys: `page_count`, `chunk_count`, `concept_count`, `new_concept_count`, `relationship_count`, `ocr_pages`, `warnings`, `embedding_status` (`complete | failed | skipped`).
+  - While processing: `stage` (`queued`, `extracting_text`, `extracting_concepts`, `linking_concepts`, `indexing`, …) and `progress` (0–1).
+  - On failure: `error: {code, message}`.
+- **`GET /documents/{id}`:** adds `section_count` and `concepts: [{id, name, section_count}]`.
+- **`DELETE`:** removes the S3 object, the Qdrant vectors, the PostgreSQL rows, and extracted concepts left without any document and without learning data (mastery records or questions). If S3 or Qdrant is unreachable, nothing is deleted and the response is `503`.
+
 ---
 
 ### 3.6 Concepts
@@ -388,6 +406,58 @@ Get the concept's neighbourhood in the prerequisite graph.
   }
 }
 ```
+
+#### Concept endpoints — implementation notes (Phase 3)
+
+- **`GET /concepts`:**
+  - Also accepts `document_id` and `sort` (`name | difficulty_estimate | mastery_level | created_at`) with `order` (`asc | desc`).
+  - `search` is full-text (stemmed) plus a substring match on the name.
+  - Concepts not yet assessed report `mastery.level = 0.0` (`novice`).
+- **`GET /concepts/{id}`:** additionally returns `dependents` (concepts that list this one as a prerequisite), `subject_id`, `chapter_id`, `section_id`, `created_at`, and `metadata.{origin, aliases}`.
+- **`related_concepts[].relationship`:** describes the other concept relative to this one: `related | generalisation | specialisation`.
+- **Edge direction:** `source` is a prerequisite of `target`.
+- **`GET /concepts/{id}/graph`:** accepts `?depth=1..3` (default 1) and includes edges of all relationship types.
+
+### 3.6.1 Content Search *(added in Phase 3 — AC-3.4)*
+
+#### `GET /search`
+
+Hybrid search over the user's document sections:
+
+- **Semantic:** Qdrant vectors, always filtered by `user_id`.
+- **Keyword:** PostgreSQL full-text search. Matches any query term, and ranks sections that cover more terms higher. A query containing a `-exclusion` uses strict AND matching.
+- **Merging:** the two result lists are combined with reciprocal-rank fusion.
+
+**Query params:** `?q=quadratic formula&mode=hybrid|keyword|semantic&subject_id=uuid&document_id=uuid&concept_id=uuid&page=1&per_page=20`
+
+- `q` is 1–500 characters.
+- `mode` defaults to `hybrid`.
+
+**Response 200 (paginated):**
+
+```json
+{
+  "data": [
+    {
+      "section_id": "uuid",
+      "document_id": "uuid",
+      "document_title": "Chapter 5",
+      "section_index": 3,
+      "heading": "5.2 The Quadratic Formula",
+      "page_numbers": [12, 13],
+      "snippet": "… the **quadratic formula** solves …",
+      "score": 0.0325,
+      "matched_by": ["keyword", "semantic"]
+    }
+  ],
+  "meta": { "request_id": "...", "timestamp": "...", "pagination": { "total": 8, "page": 1, "per_page": 20, "total_pages": 1 } }
+}
+```
+
+- **Snippets:** `**…**` marks highlighted keyword matches.
+- **Response headers:** `X-Search-Mode` gives the mode actually used.
+- **Degradation:** if semantic search is unavailable (Qdrant down, embedding failure or budget reached), `hybrid` falls back to keyword results and sets `X-Search-Degraded: true`. An explicit `mode=semantic` returns `503` instead.
+- **Audit:** every query embedding is logged as an `AIInteraction`.
 
 ---
 

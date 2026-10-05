@@ -16,6 +16,8 @@ const FORWARDED_RESPONSE_HEADERS = [
   "x-ratelimit-remaining",
   "x-ratelimit-reset",
   "retry-after",
+  "x-search-mode",
+  "x-search-degraded",
 ];
 const SAFE_SEGMENT = /^[A-Za-z0-9._~-]+$/;
 const TIMEOUT_MS = 15_000;

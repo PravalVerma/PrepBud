@@ -1,5 +1,10 @@
 # Local development dependencies for School in a Box.
-# Start everything with:  docker compose up -d
+# Start everything with:  docker compose up -d --wait
+#
+#   postgres  PostgreSQL 16            ${POSTGRES_PORT:-5432}
+#   redis     Redis 7 (Celery broker)  ${REDIS_PORT:-6379}
+#   qdrant    Qdrant vector store      ${QDRANT_PORT:-6333}
+#   s3        SeaweedFS S3 gateway     ${S3_PORT:-8333}   (local stand-in for AWS S3 / R2)
 services:
   postgres:
     image: postgres:16-alpine
@@ -33,6 +38,52 @@ services:
       timeout: 5s
       retries: 10
 
+  qdrant:
+    image: qdrant/qdrant:v1.19.1
+    container_name: siab-qdrant
+    ports:
+      - "${QDRANT_PORT:-6333}:6333"
+    volumes:
+      - qdrant-data:/qdrant/storage
+    healthcheck:
+      # The image has no curl/wget; probe the HTTP port with bash's /dev/tcp.
+      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/6333' || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # S3-compatible object storage. Browsers upload straight to it with presigned URLs,
+  # so CORS must allow the frontend origin. Credentials live in infra/seaweedfs/s3.json.
+  s3:
+    image: chrislusf/seaweedfs:4.48
+    container_name: siab-s3
+    command: >
+      server -dir=/data -s3 -s3.port=8333
+      -s3.config=/etc/seaweedfs/s3.json
+      -s3.allowedOrigins=${FRONTEND_ORIGINS:-http://localhost:3000,http://localhost:3100}
+    ports:
+      - "${S3_PORT:-8333}:8333"
+    volumes:
+      - s3-data:/data
+      - ./infra/seaweedfs/s3.json:/etc/seaweedfs/s3.json:ro
+    # Healthy only once the uploads bucket exists — the check creates it if missing
+    # (idempotent), so `docker compose up --wait` leaves a ready-to-use bucket.
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >
+          echo "s3.bucket.list" | weed shell -master=127.0.0.1:9333 2>/dev/null
+          | grep -q "${S3_BUCKET:-siab-uploads}" ||
+          (echo "s3.bucket.create -name ${S3_BUCKET:-siab-uploads}" | weed shell -master=127.0.0.1:9333
+          && echo "s3.bucket.list" | weed shell -master=127.0.0.1:9333 | grep -q "${S3_BUCKET:-siab-uploads}")
+      interval: 30s
+      timeout: 20s
+      retries: 10
+      start_period: 60s
+      start_interval: 3s
+
 volumes:
   postgres-data:
   redis-data:
+  qdrant-data:
+  s3-data:

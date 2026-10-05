@@ -107,3 +107,87 @@ async def test_missing_and_foreign_resources_are_indistinguishable(
 
     assert foreign.status_code == missing.status_code == 404
     assert foreign.json()["error"] == missing.json()["error"]
+
+
+# --- Phase 3: documents, concepts, search ------------------------------------------------
+
+
+@pytest.fixture
+async def alice_library(
+    client: httpx.AsyncClient, uploader: Any, processor: Any, fake_queue: Any
+) -> dict[str, str]:
+    from sqlalchemy import select
+
+    from app.db.models import Concept
+    from tests.fakes import concept_text
+    from tests.integration.conftest import drain
+
+    payload = await uploader.upload(
+        ALICE, concept_text("Secret Alice Topic", "Only Alice may see this").encode()
+    )
+    await drain(processor, fake_queue)
+    await uploader.upload(BOB, b"Concept: Bob Topic | Bob's own | end")
+    await drain(processor, fake_queue)
+    async with uploader.app.state.sessionmaker() as session:
+        concept_id = await session.scalar(
+            select(Concept.id).where(Concept.name == "Secret Alice Topic")
+        )
+    return {"document": payload["document_id"], "concept": str(concept_id)}
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("GET", "/documents/{document}"),
+        ("DELETE", "/documents/{document}"),
+        ("POST", "/documents/{document}/confirm-upload"),
+        ("GET", "/concepts/{concept}"),
+        ("GET", "/concepts/{concept}/graph"),
+    ],
+)
+async def test_other_users_documents_and_concepts_are_404(
+    client: httpx.AsyncClient, alice_library: dict[str, str], method: str, path: str
+) -> None:
+    url = API + path.format(**alice_library)
+    resp = await client.request(method, url, headers=BOB)
+    assert resp.status_code == 404
+    assert resp.json()["error"]["code"] == "RESOURCE_NOT_FOUND"
+    assert (
+        await client.get(API + f"/documents/{alice_library['document']}", headers=ALICE)
+    ).status_code == 200
+
+
+async def test_lists_and_search_never_show_other_users_content(
+    client: httpx.AsyncClient, alice_library: dict[str, str]
+) -> None:
+    docs = (await client.get(f"{API}/documents", headers=BOB)).json()["data"]
+    concepts = (await client.get(f"{API}/concepts", headers=BOB)).json()["data"]
+    assert [d["title"] for d in docs] == ["notes"]
+    assert [c["name"] for c in concepts] == ["Bob Topic"]
+    for mode in ("keyword", "semantic", "hybrid"):
+        hits = (
+            await client.get(
+                f"{API}/search", params={"q": "Secret Alice Topic", "mode": mode}, headers=BOB
+            )
+        ).json()["data"]
+        assert all(h["document_id"] != alice_library["document"] for h in hits), mode
+    # Filtering by Alice's ids does not leak either.
+    leaked = await client.get(
+        f"{API}/concepts", params={"document_id": alice_library["document"]}, headers=BOB
+    )
+    assert leaked.json()["data"] == []
+    leaked_search = await client.get(
+        f"{API}/search",
+        params={"q": "Alice", "document_id": alice_library["document"]},
+        headers=BOB,
+    )
+    assert leaked_search.json()["data"] == []
+
+
+async def test_upload_under_other_users_subject_is_404(
+    client: httpx.AsyncClient, alice_tree: dict[str, str], uploader: Any
+) -> None:
+    resp = await uploader.request_url(BOB, subject_id=alice_tree["subject"])
+    assert resp.status_code == 404
+    resp = await uploader.request_url(BOB, course_id=alice_tree["course"])
+    assert resp.status_code == 404

@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.config import LearningEngineSettings
+from app.config import LearningEngineSettings, Settings
 from app.core.logging import JSONFormatter, request_id_ctx, user_id_ctx
 from app.core.middleware import RateLimitResult
 from app.domain.common import Pagination, build_meta, envelope, mastery_label, paginated
@@ -35,7 +35,7 @@ class TestSettings:
         assert s.jwt_issuer is None
 
     def test_llm_tasks_configured_per_task(self) -> None:
-        tasks = build_settings().llm_tasks
+        tasks = Settings(_env_file=None).llm_tasks  # type: ignore[call-arg]
         assert {"tutor_explanation", "question_generation", "answer_evaluation"} <= set(tasks)
         assert tasks["embedding"].dimensions == 1536
         assert tasks["tutor_explanation"].streaming is True

@@ -36,11 +36,17 @@ describe("Sidebar", () => {
   it("shows later-phase pages as disabled, not links", () => {
     render(<Sidebar />);
 
-    expect(screen.queryByRole("link", { name: /concepts/i })).toBeNull();
-    expect(screen.getByText("Concepts").closest("[aria-disabled]")).toHaveAttribute(
+    expect(screen.queryByRole("link", { name: /goals/i })).toBeNull();
+    expect(screen.getByText("Goals").closest("[aria-disabled]")).toHaveAttribute(
       "aria-disabled",
       "true",
     );
+  });
+
+  it("links to the Phase 3 content pages", () => {
+    render(<Sidebar />);
+    expect(screen.getByRole("link", { name: /upload material/i })).toHaveAttribute("href", "/upload");
+    expect(screen.getByRole("link", { name: /concepts/i })).toHaveAttribute("href", "/concepts");
   });
 
   it("marks nested routes active", () => {

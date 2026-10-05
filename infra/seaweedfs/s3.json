@@ -1,0 +1,9 @@
+{
+  "identities": [
+    {
+      "name": "siab-local",
+      "credentials": [{ "accessKey": "siab-local-access", "secretKey": "siab-local-secret-key" }],
+      "actions": ["Admin", "Read", "List", "Tagging", "Write"]
+    }
+  ]
+}
