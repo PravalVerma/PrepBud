@@ -25,6 +25,9 @@ class LLMTaskConfig(BaseModel):
     streaming: bool = False
     response_format: Literal["json", "text"] = "text"
     dimensions: int | None = None
+    # Tried once when the primary call fails (e.g. a rate-limited free model).
+    fallback_provider: str | None = None
+    fallback_model: str | None = None
 
 
 def _default_llm_tasks() -> dict[str, LLMTaskConfig]:

@@ -69,6 +69,13 @@ class LLMClient:
             self._providers[name] = self._factory(name, self.settings)
         return self._providers[name]
 
+    def _targets(self, cfg: LLMTaskConfig) -> list[tuple[LLMProvider, str]]:
+        """Primary provider/model, then the configured fallback (if any)."""
+        targets = [(self.provider(cfg.provider), cfg.model)]
+        if cfg.fallback_provider and cfg.fallback_model:
+            targets.append((self.provider(cfg.fallback_provider), cfg.fallback_model))
+        return targets
+
     async def aclose(self) -> None:
         for provider in self._providers.values():
             await provider.aclose()
@@ -84,35 +91,38 @@ class LLMClient:
         json_mode: bool | None = None,
     ) -> LLMResponse:
         cfg = self.task_config(task)
-        provider = self.provider(cfg.provider)
         await self.recorder.check_budget(ctx.user_id)
         wants_json = cfg.response_format == "json" if json_mode is None else json_mode
         request = [m.model_dump() for m in messages]
-        start = time.monotonic()
-        try:
-            response = await provider.complete(
-                messages,
-                model=cfg.model,
-                temperature=cfg.temperature,
-                max_tokens=cfg.max_tokens,
-                json_mode=wants_json,
-            )
-        except LLMError as exc:
-            await self.recorder.record(
-                ctx,
-                InteractionRecord(
-                    provider=provider.name,
-                    model=cfg.model,
-                    task=task,
-                    request=request,
-                    response=None,
-                    input_tokens=sum(estimate_tokens(m.content) for m in messages),
-                    latency_ms=int((time.monotonic() - start) * 1000),
-                    status=exc.status,
-                    error_message=str(exc)[:1000],
-                ),
-            )
-            raise
+        targets = self._targets(cfg)
+        for index, (provider, model) in enumerate(targets):
+            start = time.monotonic()
+            try:
+                response = await provider.complete(
+                    messages,
+                    model=model,
+                    temperature=cfg.temperature,
+                    max_tokens=cfg.max_tokens,
+                    json_mode=wants_json,
+                )
+                break
+            except LLMError as exc:
+                await self.recorder.record(
+                    ctx,
+                    InteractionRecord(
+                        provider=provider.name,
+                        model=model,
+                        task=task,
+                        request=request,
+                        response=None,
+                        input_tokens=sum(estimate_tokens(m.content) for m in messages),
+                        latency_ms=int((time.monotonic() - start) * 1000),
+                        status=exc.status,
+                        error_message=str(exc)[:1000],
+                    ),
+                )
+                if index == len(targets) - 1:
+                    raise
         await self.recorder.record(
             ctx,
             InteractionRecord(
@@ -169,21 +179,44 @@ class LLMClient:
     async def stream(
         self, task: str, messages: list[LLMMessage], ctx: AICallContext
     ) -> AsyncIterator[str]:
-        """Stream text deltas; the interaction is recorded once the stream finishes."""
+        """Stream text deltas; the interaction is recorded once the stream finishes.
+
+        A failure before the first delta moves on to the task's fallback (if configured);
+        once text has reached the caller the error propagates instead.
+        """
         cfg = self.task_config(task)
-        provider = self.provider(cfg.provider)
         await self.recorder.check_budget(ctx.user_id)
+        targets = self._targets(cfg)
+        for index, (provider, model) in enumerate(targets):
+            started = False
+            try:
+                async for delta in self._stream_once(task, messages, ctx, cfg, provider, model):
+                    started = True
+                    yield delta
+                return
+            except LLMError:
+                if started or index == len(targets) - 1:
+                    raise
+
+    async def _stream_once(
+        self,
+        task: str,
+        messages: list[LLMMessage],
+        ctx: AICallContext,
+        cfg: LLMTaskConfig,
+        provider: LLMProvider,
+        model: str,
+    ) -> AsyncIterator[str]:
         request = [m.model_dump() for m in messages]
         parts: list[str] = []
         input_tokens: int | None = None
         output_tokens: int | None = None
-        model = cfg.model
         start = time.monotonic()
         status: Any = "success"
         error: str | None = None
         try:
             async for event in provider.stream(
-                messages, model=cfg.model, temperature=cfg.temperature, max_tokens=cfg.max_tokens
+                messages, model=model, temperature=cfg.temperature, max_tokens=cfg.max_tokens
             ):
                 if event.delta:
                     parts.append(event.delta)

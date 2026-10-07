@@ -67,6 +67,24 @@ class TestComplete:
         assert record.error_message == "down"
         assert record.response is None
 
+    async def test_falls_back_when_primary_fails(self) -> None:
+        down = FakeLLMProvider(fail_with=LLMServerError("down"), fail_times=-1)
+        backup = FakeLLMProvider(raw_response="from backup")
+        settings = build_settings()
+        settings.llm_tasks["session_summary"] = settings.llm_tasks["session_summary"].model_copy(
+            update={"fallback_provider": "backup", "fallback_model": "backup-model"}
+        )
+        rec = MemoryRecorder()
+        llm = LLMClient(settings, rec, providers={"fake": down, "backup": backup})  # type: ignore[arg-type,dict-item]
+
+        out = await llm.complete("session_summary", MSG, ctx())
+        assert out.content == "from backup"
+        assert [r.status for _, r in rec.records] == ["error", "success"]
+        assert rec.records[1][1].model == "backup-model"
+
+        chunks = [d async for d in llm.stream("session_summary", MSG, ctx())]
+        assert "".join(chunks) == "Hello student!"  # the backup streamed
+
     async def test_budget_checked_before_calling(self) -> None:
         llm, rec, fake = client(budget_exceeded=True)
         with pytest.raises(AIBudgetExceededError):
