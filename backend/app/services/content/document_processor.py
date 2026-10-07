@@ -518,6 +518,8 @@ class DocumentProcessor:
                     f"{len(extracted.ocr_unavailable_pages)} page(s) had no text layer "
                     "and OCR is unavailable"
                 )
+            if not stats["concept_count"]:
+                warnings.append("No concepts could be extracted from this document")
             if plan.relationship_detection != "complete":
                 warnings.append("Concept relationships could not be detected")
             stats["warnings"] = warnings

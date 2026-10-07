@@ -132,6 +132,12 @@ class TestParseExtraction:
         with pytest.raises(ValueError, match="concepts"):
             parse_extraction({"items": []}, chunk_count=1, max_concepts=3)
 
+    def test_bare_empty_list_is_rejected_but_empty_object_is_valid(self) -> None:
+        # A bare [] is what the lenient JSON scan yields for a malformed response.
+        with pytest.raises(ValueError, match="concepts"):
+            parse_extraction([], chunk_count=1, max_concepts=3)
+        assert parse_extraction({"concepts": []}, chunk_count=1, max_concepts=3) == []
+
 
 class TestMergeAndBatch:
     def test_merge_across_batches(self) -> None:

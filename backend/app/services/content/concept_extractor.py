@@ -163,6 +163,9 @@ def parse_extraction(raw: Any, *, chunk_count: int, max_concepts: int) -> list[E
     items = raw.get("concepts") if isinstance(raw, dict) else raw
     if not isinstance(items, list):
         raise ValueError("expected a 'concepts' array")
+    if not items and not isinstance(raw, dict):
+        # A bare ``[]`` is what the lenient JSON scan returns when the real object was malformed.
+        raise ValueError("expected a 'concepts' array")
     out: list[ExtractedConcept] = []
     seen: set[str] = set()
     for item in items:
@@ -356,7 +359,7 @@ class ConceptExtractor:
                 "concepts": parse_extraction(raw, chunk_count=len(batch), max_concepts=max_concepts)
             },
         )
-        if self.cache:
+        if self.cache and output.concepts:  # never pin an empty result for these chunks
             await self.cache.set(user, fingerprint, output.concepts)
         return output.concepts
 
